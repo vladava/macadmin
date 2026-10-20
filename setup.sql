@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS mac_info (
 -- (IF NOT EXISTS: skript jde spustit opakovane)
 ALTER TABLE radpostauth ADD INDEX IF NOT EXISTS authdate (authdate);
 ALTER TABLE radpostauth ADD INDEX IF NOT EXISTS reply_date (reply, authdate);
+-- posledni prihlaseni zarizeni (sloupec Naposledy, filtr neprihlasenych)
+ALTER TABLE radpostauth ADD INDEX IF NOT EXISTS user_reply_date (username, reply, authdate);
 
 -- Uzivatel pro webove rozhrani - jen nutna prava
 CREATE USER IF NOT EXISTS 'macadmin'@'localhost' IDENTIFIED BY 'ZMENTE_HESLO';

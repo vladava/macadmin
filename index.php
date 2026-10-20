@@ -49,10 +49,17 @@ try {
             $macs = array_values(array_filter(array_map('strval', (array)($_POST['mac'] ?? [])), fn($m) => $m !== ''));
             $n = delete_devices($macs);
             flash("Smazáno zařízení: $n");
-            redirect('?p=zarizeni&' . http_build_query(['q' => $_POST['q'] ?? '', 't' => $_POST['t'] ?? '']));
+            if (($_POST['zpet'] ?? '') === 'udrzba') {
+                redirect('?p=udrzba');
+            }
+            redirect('?p=zarizeni&' . http_build_query([
+                'q' => $_POST['q'] ?? '', 't' => $_POST['t'] ?? '', 'r' => $_POST['r'] ?? '', 'n' => $_POST['n'] ?? '',
+            ]));
         }
         $q = trim((string)($_GET['q'] ?? ''));
         $t = trim((string)($_GET['t'] ?? ''));
+        $rnd = !empty($_GET['r']);
+        $nd = max(0, min((int)($_GET['n'] ?? 0), 3650)); // neprihlaseno alespon nd dni
         $s = max(1, (int)($_GET['s'] ?? 1));
         $perPage = 500;
         $where = ['r.attribute = ?'];
@@ -73,13 +80,24 @@ try {
             $where[] = 'i.trida = ?';
             $args[] = $t;
         }
+        if ($rnd) {
+            // stejne pravidlo jako is_random_mac(): druhy hexa znak 2, 6, A nebo E
+            $where[] = "UPPER(SUBSTRING(REPLACE(REPLACE(REPLACE(r.username, ':', ''), '-', ''), '.', ''), 2, 1)) IN ('2', '6', 'A', 'E')";
+        }
+        if ($nd > 0) {
+            $where[] = "NOT EXISTS (SELECT 1 FROM radpostauth p WHERE p.username = r.username
+                         AND p.reply = 'Access-Accept' AND p.authdate > NOW() - INTERVAL ? DAY)";
+            $args[] = $nd;
+        }
         $from = 'FROM radcheck r LEFT JOIN mac_info i ON i.mac = r.username WHERE ' . implode(' AND ', $where);
         $st = db()->prepare("SELECT COUNT(*) $from");
         $st->execute($args);
         $found = (int)$st->fetchColumn();
         $pages = max(1, (int)ceil($found / $perPage));
         $s = min($s, $pages);
-        $st = db()->prepare("SELECT r.username AS mac, i.jmeno, i.trida, i.poznamka, i.vytvoreno $from
+        $st = db()->prepare("SELECT r.username AS mac, i.jmeno, i.trida, i.poznamka, i.vytvoreno,
+                  (SELECT MAX(p.authdate) FROM radpostauth p WHERE p.username = r.username AND p.reply = 'Access-Accept') AS naposledy
+                $from
                 ORDER BY i.trida, i.jmeno, r.username LIMIT $perPage OFFSET " . (($s - 1) * $perPage));
         $st->execute($args);
         $rows = $st->fetchAll();
@@ -87,6 +105,8 @@ try {
         $st = db()->prepare('SELECT COUNT(*) FROM radcheck WHERE attribute = ?');
         $st->execute([cfg('radcheck_attribute')]);
         $total = (int)$st->fetchColumn();
+        $since = db()->query('SELECT MIN(authdate) FROM radpostauth')->fetchColumn();
+        $keep = ['p' => 'zarizeni', 'q' => $q, 't' => $t, 'r' => $rnd ? '1' : '', 'n' => $nd ?: ''];
 
         page_header('Zařízení', 'zarizeni');
         echo '<form class="row" method="get"><input type="hidden" name="p" value="zarizeni">'
@@ -96,10 +116,18 @@ try {
             echo '<option' . ($tr['trida'] === $t ? ' selected' : '') . ' value="' . h($tr['trida']) . '">'
                 . h($tr['trida']) . ' (' . (int)$tr['n'] . ')</option>';
         }
-        echo '</select></label><button>Filtrovat</button></form>';
+        echo '</select></label>'
+            . '<label>Nepřihlášeno aspoň (dní)<input name="n" type="number" min="1" max="3650" value="' . ($nd ?: '') . '" size="5"></label>'
+            . '<label><span><input type="checkbox" name="r" value="1"' . ($rnd ? ' checked' : '') . '> jen náhodné</span></label>'
+            . '<button>Filtrovat</button></form>';
+        if ($nd > 0 && ($since === null || strtotime((string)$since) > time() - $nd * 86400)) {
+            echo '<div class="flash err">Historie přihlášení je k dispozici teprve od '
+                . h($since === null ? 'dneška (zatím žádná)' : substr((string)$since, 0, 10))
+                . ', takže filtr „nepřihlášeno ' . $nd . ' dní“ zatím není spolehlivý – zahrnuje i zařízení, která se jen dosud nepřipojila.</div>';
+        }
         echo '<p class="mut">Nalezeno ' . $found . ' z ' . $total . ' povolených zařízení.';
         if ($pages > 1) {
-            $link = fn($n) => '?' . http_build_query(['p' => 'zarizeni', 'q' => $q, 't' => $t, 's' => $n]);
+            $link = fn($n) => '?' . http_build_query($keep + ['s' => $n]);
             echo ' Stránka ' . $s . ' z ' . $pages . ':';
             for ($i = 1; $i <= $pages; $i++) {
                 echo ' ' . ($i === $s ? '<strong>' . $i . '</strong>' : '<a href="' . h($link($i)) . '">' . $i . '</a>');
@@ -108,13 +136,15 @@ try {
         echo '</p>';
         echo '<form method="post" onsubmit="return confirm(\'Opravdu smazat vybraná zařízení?\')">' . csrf_field()
             . '<input type="hidden" name="q" value="' . h($q) . '"><input type="hidden" name="t" value="' . h($t) . '">'
+            . '<input type="hidden" name="r" value="' . ($rnd ? '1' : '') . '"><input type="hidden" name="n" value="' . ($nd ?: '') . '">'
             . '<div class="scroll"><table><tr><th><input type="checkbox" onclick="for(const c of document.querySelectorAll(\'.sel\'))c.checked=this.checked"></th>'
-            . '<th>MAC</th><th>Jméno</th><th>Třída</th><th>Poznámka</th><th>Přidáno</th><th></th></tr>';
+            . '<th>MAC</th><th>Jméno</th><th>Třída</th><th>Poznámka</th><th>Přidáno</th><th>Naposledy</th><th></th></tr>';
         foreach ($rows as $r) {
             echo '<tr><td><input type="checkbox" class="sel" name="mac[]" value="' . h($r['mac']) . '"></td>'
                 . '<td class="mono">' . h($r['mac']) . (is_random_mac($r['mac']) ? ' <span class="tag">náhodná</span>' : '') . '</td>'
                 . '<td>' . h($r['jmeno']) . '</td><td>' . h($r['trida']) . '</td><td>' . h($r['poznamka']) . '</td>'
                 . '<td class="mut">' . h($r['vytvoreno'] ? substr($r['vytvoreno'], 0, 10) : '') . '</td>'
+                . '<td class="mut">' . h($r['naposledy'] ? substr($r['naposledy'], 0, 16) : '–') . '</td>'
                 . '<td><a href="?p=pridat&mac=' . urlencode($r['mac']) . '">upravit</a></td></tr>';
         }
         echo '</table></div><p><button class="danger" name="delete" value="1">Smazat vybrané</button></p></form>';
@@ -150,7 +180,8 @@ try {
             if (is_random_mac($mac)) {
                 flash("Pozor: $mac je náhodná (soukromá) adresa, telefon ji může časem změnit.", 'err');
             }
-            redirect(isset($_POST['zpet']) && $_POST['zpet'] === 'zamitnuta' ? '?p=zamitnuta' : '?p=pridat');
+            $zpet = (string)($_POST['zpet'] ?? '');
+            redirect(in_array($zpet, ['zamitnuta', 'udrzba'], true) ? '?p=' . $zpet : '?p=pridat');
         }
         $arg = trim((string)($_GET['mac'] ?? ''));
         $norm = $arg !== '' ? normalize_mac($arg) : null;
@@ -178,7 +209,7 @@ try {
             . '<button>' . ($isEdit ? 'Uložit' : 'Přidat') . '</button></form>';
         if ($isEdit) {
             echo '<form method="post" action="?p=zarizeni" onsubmit="return confirm(\'Opravdu smazat toto zařízení?\')">' . csrf_field()
-                . '<input type="hidden" name="mac[]" value="' . h($edit) . '">'
+                . '<input type="hidden" name="mac[]" value="' . h($edit) . '"><input type="hidden" name="zpet" value="' . h($zpet) . '">'
                 . '<button class="danger" name="delete" value="1">Smazat zařízení</button></form>';
         }
         echo '<datalist id="tridy">';
@@ -308,6 +339,11 @@ try {
             flash("Smazáno starých záznamů přihlášení: $n");
             redirect('?p=udrzba');
         }
+        if ($post && isset($_POST['delete'])) {
+            $macs = array_values(array_filter(array_map('strval', (array)($_POST['mac'] ?? [])), fn($m) => $m !== ''));
+            flash('Smazáno zařízení: ' . delete_devices($macs));
+            redirect('?p=udrzba');
+        }
         if ($post && isset($_POST['normalize'])) {
             [$fixed, $dupl] = fix_mac_format();
             flash("Opraveno zápisů: $fixed, sloučeno duplicit: $dupl");
@@ -342,13 +378,29 @@ try {
             . '<form method="post">' . csrf_field() . '<button name="prune" value="1" class="sec">Promazat nyní</button></form></div>';
         echo '<div class="card"><h2>Nestandardní zápis MAC (' . count($bad) . ')</h2>'
             . '<p class="mut">FreeRADIUS hledá adresu ve tvaru <code>AA:BB:CC:DD:EE:FF</code>. Jinak zapsané adresy nemusí projít ověřením.</p>';
-        if ($bad) {
-            echo '<div class="scroll"><table><tr><th>V databázi</th><th>Opraveno na</th></tr>';
-            foreach (array_slice($bad, 0, 200) as [$o, $n]) {
-                echo '<tr><td class="mono">[' . h($o) . ']</td><td class="mono">' . ($n !== null ? h($n) : 'neplatná – <a href="?p=pridat&mac=' . urlencode($o) . '">opravit nebo smazat</a>') . '</td></tr>';
+        $fixable = array_filter($bad, fn($b) => $b[1] !== null);
+        $invalid = array_filter($bad, fn($b) => $b[1] === null);
+        if ($fixable) {
+            echo '<h2>Lze opravit automaticky (' . count($fixable) . ')</h2>'
+                . '<div class="scroll"><table><tr><th>V databázi</th><th>Opraveno na</th></tr>';
+            foreach (array_slice($fixable, 0, 200) as [$o, $n]) {
+                echo '<tr><td class="mono">[' . h($o) . ']</td><td class="mono">' . h($n) . '</td></tr>';
             }
             echo '</table></div><form method="post" style="margin-top:8px">' . csrf_field()
                 . '<button name="normalize" value="1">Opravit zápis</button></form>';
+        }
+        if ($invalid) {
+            echo '<h2>Neplatné – nejsou to MAC adresy (' . count($invalid) . ')</h2>'
+                . '<p class="mut">Nemají 12 šestnáctkových znaků, FreeRADIUS je nikdy nepovolí. Opravte je ručně, nebo je smažte.</p>'
+                . '<form method="post" onsubmit="return confirm(\'Opravdu smazat vybrané záznamy?\')">' . csrf_field()
+                . '<div class="scroll"><table><tr><th><input type="checkbox" onclick="for(const c of document.querySelectorAll(\'.selbad\'))c.checked=this.checked"></th>'
+                . '<th>V databázi</th><th></th></tr>';
+            foreach ($invalid as [$o]) {
+                echo '<tr><td><input type="checkbox" class="selbad" name="mac[]" value="' . h($o) . '"></td>'
+                    . '<td class="mono">[' . h($o) . ']</td>'
+                    . '<td><a href="?p=pridat&zpet=udrzba&mac=' . urlencode($o) . '">opravit…</a></td></tr>';
+            }
+            echo '</table></div><p><button class="danger" name="delete" value="1">Smazat vybrané</button></p></form>';
         }
         echo '</div>';
         break;
