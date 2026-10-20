@@ -22,6 +22,18 @@ if (!is_logged_in()) {
         . '<div class="row"><label>Jméno<input name="user" autocomplete="username" required autofocus></label></div>'
         . '<div class="row"><label>Heslo<input name="pass" type="password" autocomplete="current-password" required></label></div>'
         . '<button>Přihlásit</button></form>';
+    echo <<<'HTML'
+<details class="help-login"><summary>Zapomenuté jméno nebo heslo?</summary>
+<p>Účet správce je v souboru <code>/var/www/macadmin/config.php</code>. Přihlaste se na server přes SSH jako root.</p>
+<p><strong>Jméno</strong> zjistíte příkazem:</p>
+<pre>grep admin_user /var/www/macadmin/config.php</pre>
+<p><strong>Nové heslo</strong> nastavíte takto (místo <code>NoveHeslo123</code> napište své):</p>
+<pre>HASH=$(php -r 'echo password_hash($argv[1], PASSWORD_DEFAULT);' 'NoveHeslo123')
+sed -i "s|'admin_pass_hash' => .*|'admin_pass_hash' => '$HASH',|" /var/www/macadmin/config.php
+grep admin_pass_hash /var/www/macadmin/config.php</pre>
+<p>Poslední příkaz musí ukázat řádek s <code>'$2y$…'</code> v jednoduchých uvozovkách. Pak se rovnou přihlaste – nic se nerestartuje.</p>
+</details>
+HTML;
     page_footer();
     exit;
 }

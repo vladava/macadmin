@@ -1,2 +1,4 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# verze aplikace (APP_VERSION v lib.php) doplni git archive / tarball z GitHubu
+lib.php export-subst

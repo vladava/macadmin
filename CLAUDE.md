@@ -27,6 +27,7 @@ Náhrada za daloRADIUS. Jednoduchá PHP 8 aplikace (bez frameworku) nad databáz
 - Všechny SQL dotazy přes PDO prepared statements, všechny POST formuláře s CSRF tokenem, výstup přes `h()`.
 - MAC vždy normalizovat přes `normalize_mac()`; náhodné (soukromé) MAC poznat přes `is_random_mac()`.
 - `config.php` se necommituje (je v .gitignore), vzor je `config.sample.php`.
+- Verze aplikace (`APP_VERSION` v `lib.php`, zobrazuje se v patičce) se doplní sama přes `export-subst` v `.gitattributes` při stažení tarballu z GitHubu – ručně ji neměnit.
 
 ## Test lokálně
 MariaDB se schématem FreeRADIUS + `setup.sql`, pak `php -S 127.0.0.1:8099` v adresáři projektu.

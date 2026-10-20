@@ -1,6 +1,10 @@
 <?php
 declare(strict_types=1);
 
+// Datum a kod commitu; doplni git archive (export-subst v .gitattributes), tedy i tarball z GitHubu pro macadmin-update.
+const APP_VERSION = '$Format:%cs %h$';
+const APP_AUTHOR = 'Vladimír Vais';
+
 function cfg(?string $key = null)
 {
     static $c = null;
@@ -793,9 +797,20 @@ function page_header(string $title, string $active = ''): void
     unset($_SESSION['flash']);
 }
 
+/** Verze pro zobrazeni: "2026-10-21 (abc1234)", v pracovni kopii z gitu "vývojová". */
+function app_version(): string
+{
+    if (str_starts_with(APP_VERSION, '$')) {
+        return 'vývojová';
+    }
+    [$date, $hash] = array_pad(explode(' ', APP_VERSION, 2), 2, '');
+    return $date . ($hash !== '' ? " ($hash)" : '');
+}
+
 function page_footer(): void
 {
-    echo '</main></body></html>';
+    echo '</main><footer>macadmin – správa MAC adres pro wifi GFP · verze ' . h(app_version())
+        . ' · autor ' . h(APP_AUTHOR) . '</footer></body></html>';
 }
 
 function css(): string
@@ -820,6 +835,9 @@ button.link{background:none;border:0;color:var(--acc);padding:0}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:0 0 16px}
 .tag{display:inline-block;font-size:12px;padding:1px 6px;border-radius:4px;background:var(--warn)}.mut{color:var(--mut)}
 .scroll{overflow-x:auto}
+footer{max-width:1100px;margin:8px auto 24px;padding:0 16px;color:var(--mut);font-size:12px}
+details.help-login{max-width:820px;font-size:14px}details.help-login summary{cursor:pointer;color:var(--acc)}
+details.help-login pre{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:8px;overflow-x:auto;font-size:12px}
 .help p,.help li{max-width:80ch}.help li{margin:0 0 6px}.help h2{margin-top:4px}.help th{white-space:nowrap}
 .help pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;overflow-x:auto;font-size:13px}
 CSS;
