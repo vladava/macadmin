@@ -96,7 +96,15 @@ client wifi-site {
 Výchozí `sites-enabled/default` už `-sql` v sekcích authorize a post-auth obsahuje, není potřeba nic měnit.
 Pro kontrolu porovnejte se starým serverem: `diff` starého a nového `sites-enabled/default`.
 
-Kontrola konfigurace, firewall, spuštění:
+Certifikát pro modul EAP (AlmaLinux 9 ho po instalaci nemá a bez něj FreeRADIUS nenastartuje, i když se EAP pro MAC nepoužívá):
+
+```
+cd /etc/raddb/certs && ./bootstrap
+chown root:radiusd /etc/raddb/certs/* && chmod 640 /etc/raddb/certs/* && chmod 750 /etc/raddb/certs/bootstrap
+restorecon -R /etc/raddb/certs
+```
+
+Kontrola konfigurace, firewall, spuštění (má-li server i veřejnou IP, povolte RADIUS ve firewallu jen ze školních sítí přes `--add-rich-rule`):
 
 ```
 radiusd -XC
@@ -141,9 +149,10 @@ chown root:apache /var/www/macadmin/config.php
 chmod 640 /var/www/macadmin/config.php
 setsebool -P httpd_can_network_connect_db 1
 restorecon -R /var/www/macadmin
+echo 'date.timezone = Europe/Prague' > /etc/php.d/99-macadmin.ini
 firewall-cmd --permanent --add-service=http --add-service=https
 firewall-cmd --reload
-systemctl enable --now httpd
+systemctl enable --now php-fpm httpd
 ```
 
 Rozhraní: `https://IP-NOVEHO-SERVERU/macadmin/` (přístup jen z 192.168.0.0/24, viz `macadmin.conf`; HTTP se přesměruje na HTTPS).
