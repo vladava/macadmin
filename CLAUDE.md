@@ -19,6 +19,7 @@ Náhrada za daloRADIUS. Jednoduchá PHP 8 aplikace (bez frameworku) nad databáz
 - `import-forms.php` – CLI skript pro cron (import Excelu z Forms z OneDrive podle `forms_url`)
 - `setup.sql` – tabulky `mac_info` a `mac_smazane` (smazané MAC, import je znovu nepřidá), indexy, DB uživatel `macadmin`
 - `macadmin.conf` – Apache (přístup jen z 192.168.0.0/24)
+- `update.sh` – aktualizace na serveru z GitHubu (`/usr/local/sbin/macadmin-update`): záloha, nové soubory, Apache, setup.sql, cron; seznam souborů aplikace je v `APP_FILES`
 - `README.md` – postup přesunu RADIUS ze starého serveru a instalace
 
 ## Zásady

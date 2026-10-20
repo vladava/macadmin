@@ -189,3 +189,23 @@ a vytvořit log: `touch /var/log/macadmin-udrzba.log && chown apache /var/log/ma
 4. Po pár dnech bez potíží starý server vypnout.
 
 Po instalaci rozhraní spusťte v Údržbě **Opravit zápis** – sjednotí nestandardně zapsané MAC (na starém serveru jich bylo 41). Teprve potom importujte `jmena.csv`, jinak se jména k nestandardně zapsaným MAC nespárují a vzniknou duplicitní záznamy.
+
+## 6. Aktualizace
+
+Jednou nainstalovat skript:
+
+```
+curl -fsSL https://raw.githubusercontent.com/vladava/macadmin/main/update.sh -o /usr/local/sbin/macadmin-update
+chmod 700 /usr/local/sbin/macadmin-update
+```
+
+Pak při každé aktualizaci stačí jako root spustit `macadmin-update`. Skript:
+
+- zjistí poslední verzi na GitHubu a vypíše seznam změn (když je verze aktuální, nic nedělá; `--force` nainstaluje znovu),
+- zkontroluje syntaxi PHP, zazálohuje web do `/root/macadmin-zalohy` (posledních 5) a nahraje nové soubory – `config.php` nikdy nepřepisuje,
+- konfiguraci Apache aktualizuje sám jen tehdy, když nebyla ručně upravená (jinak ukáže rozdíl a zeptá se), před reloadem ji otestuje,
+- při změně `setup.sql` se zeptá na heslo root do MariaDB a upraví databázi,
+- doplní chybějící cron úlohy (promazání historie, import z OneDrive, je-li nastavený `forms_url`),
+- aktualizuje i sám sebe.
+
+Kdyby byl repozitář soukromý, uložte GitHub token (jen čtení obsahu) do `/root/.macadmin-token`.
