@@ -31,10 +31,10 @@ Export dat (jen potřebné tabulky, bez 19 mil. řádků historie):
 mysqldump -u radius -p --no-create-info --complete-insert radius radcheck radreply radgroupcheck radgroupreply radusergroup nas > radius-data.sql
 ```
 
-Jména z daloRADIUS (pokud tabulka `userinfo` existuje) jako CSV pro pozdější import:
+Jména z daloRADIUS (pokud tabulka `userinfo` existuje) jako CSV pro pozdější import – jen k MAC, které jsou v `radcheck` (v `userinfo` zůstávají i smazaná zařízení a import by je znovu povolil):
 
 ```
-mysql -u radius -p radius -B -N -e "SELECT username, TRIM(CONCAT(IFNULL(firstname,''),' ',IFNULL(lastname,''))), IFNULL(department,''), REPLACE(IFNULL(notes,''),';',',') FROM userinfo" | sed 's/\t/;/g' > jmena.csv
+mysql -u radius -p radius -B -N -e "SELECT u.username, TRIM(CONCAT(IFNULL(u.firstname,''),' ',IFNULL(u.lastname,''))), IFNULL(u.department,''), REPLACE(IFNULL(u.notes,''),';',',') FROM userinfo u JOIN radcheck r ON r.username = u.username AND r.attribute = 'Auth-Type'" | sed 's/\t/;/g' > jmena.csv
 ```
 
 Zkopírujte si také `/etc/raddb/clients.conf` (obsahuje sdílené heslo pro AP).
@@ -165,4 +165,4 @@ a vytvořit log: `touch /var/log/macadmin-udrzba.log && chown apache /var/log/ma
 3. Návrat: v profilu vrátit IP `192.168.0.100`.
 4. Po pár dnech bez potíží starý server vypnout.
 
-Po přepnutí v rozhraní Údržba spusťte **Opravit zápis** – sjednotí nestandardně zapsané MAC (na starém serveru jich bylo 41).
+Po instalaci rozhraní spusťte v Údržbě **Opravit zápis** – sjednotí nestandardně zapsané MAC (na starém serveru jich bylo 41). Teprve potom importujte `jmena.csv`, jinak se jména k nestandardně zapsaným MAC nespárují a vzniknou duplicitní záznamy.
