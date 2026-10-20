@@ -27,3 +27,6 @@ Náhrada za daloRADIUS. Jednoduchá PHP 8 aplikace (bez frameworku) nad databáz
 
 ## Test lokálně
 MariaDB se schématem FreeRADIUS + `setup.sql`, pak `php -S 127.0.0.1:8099` v adresáři projektu.
+
+## Git
+- Změny po otestování commitovat a pushovat rovnou do `main` (bez vedlejší větve a PR).
