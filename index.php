@@ -44,6 +44,19 @@ try {
 
     /* ---------- Seznam zarizeni ---------- */
     case 'zarizeni':
+        if ($post && isset($_POST['delete_all'])) {
+            // vsechna zarizeni odpovidajici filtru (i pres vic stranek); bez filtru nic
+            $f = device_filter($_POST);
+            if (!$f['active']) {
+                flash('Bez filtru nejde smazat všechno najednou.', 'err');
+                redirect('?p=zarizeni');
+            }
+            $st = db()->prepare('SELECT r.username FROM radcheck r LEFT JOIN mac_info i ON i.mac = r.username WHERE '
+                . implode(' AND ', $f['where']));
+            $st->execute($f['args']);
+            flash('Smazáno zařízení: ' . delete_devices($st->fetchAll(PDO::FETCH_COLUMN)));
+            redirect('?p=zarizeni');
+        }
         if ($post && isset($_POST['delete'])) {
             // presny zapis z databaze, aby sly smazat i nestandardni a neplatne zaznamy
             $macs = array_values(array_filter(array_map('strval', (array)($_POST['mac'] ?? [])), fn($m) => $m !== ''));
@@ -56,45 +69,10 @@ try {
                 'q' => $_POST['q'] ?? '', 't' => $_POST['t'] ?? '', 'l' => $_POST['l'] ?? '', 'r' => $_POST['r'] ?? '', 'n' => $_POST['n'] ?? '',
             ]));
         }
-        $q = trim((string)($_GET['q'] ?? ''));
-        $t = trim((string)($_GET['t'] ?? ''));
-        $l = (string)($_GET['l'] ?? '');
-        $l = preg_match('/^[a-z]$/', $l) ? $l : ''; // pismeno tridy za rokem nastupu (2026.g)
-        $rnd = !empty($_GET['r']);
-        $nd = max(0, min((int)($_GET['n'] ?? 0), 3650)); // neprihlaseno alespon nd dni
+        $f = device_filter($_GET);
+        ['q' => $q, 't' => $t, 'l' => $l, 'r' => $rnd, 'n' => $nd, 'where' => $where, 'args' => $args] = $f;
         $s = max(1, (int)($_GET['s'] ?? 1));
         $perPage = 500;
-        $where = ['r.attribute = ?'];
-        $args = [cfg('radcheck_attribute')];
-        if ($q !== '') {
-            $like = '%' . addcslashes($q, '%_\\') . '%';
-            $cond = ['r.username LIKE ?', 'i.jmeno LIKE ?', 'i.poznamka LIKE ?'];
-            $args = array_merge($args, [$like, $like, $like]);
-            // cast MAC v jinem zapisu (napr. 0b9a05b7) hledat i bez oddelovacu - jen kdyz dotaz vypada jako MAC
-            $hex = preg_replace('/[^0-9A-Fa-f]/', '', $q);
-            if (strlen($hex) >= 4 && preg_match('/^[0-9A-Fa-f:.\s-]+$/', $q)) {
-                $cond[] = "REPLACE(REPLACE(REPLACE(r.username, ':', ''), '-', ''), '.', '') LIKE ?";
-                $args[] = '%' . $hex . '%';
-            }
-            $where[] = '(' . implode(' OR ', $cond) . ')';
-        }
-        if ($t !== '') {
-            $where[] = 'i.trida = ?';
-            $args[] = $t;
-        }
-        if ($l !== '') {
-            $where[] = "i.trida LIKE ?";
-            $args[] = '____.' . $l;
-        }
-        if ($rnd) {
-            // stejne pravidlo jako is_random_mac(): druhy hexa znak 2, 6, A nebo E
-            $where[] = "UPPER(SUBSTRING(REPLACE(REPLACE(REPLACE(r.username, ':', ''), '-', ''), '.', ''), 2, 1)) IN ('2', '6', 'A', 'E')";
-        }
-        if ($nd > 0) {
-            $where[] = "NOT EXISTS (SELECT 1 FROM radpostauth p WHERE p.username = r.username
-                         AND p.reply = 'Access-Accept' AND p.authdate > NOW() - INTERVAL ? DAY)";
-            $args[] = $nd;
-        }
         $from = 'FROM radcheck r LEFT JOIN mac_info i ON i.mac = r.username WHERE ' . implode(' AND ', $where);
         $st = db()->prepare("SELECT COUNT(*) $from");
         $st->execute($args);
@@ -147,7 +125,7 @@ try {
             }
         }
         echo '</p>';
-        echo '<form method="post" onsubmit="return confirm(\'Opravdu smazat vybraná zařízení?\')">' . csrf_field()
+        echo '<form method="post">' . csrf_field()
             . '<input type="hidden" name="q" value="' . h($q) . '"><input type="hidden" name="t" value="' . h($t) . '"><input type="hidden" name="l" value="' . h($l) . '">'
             . '<input type="hidden" name="r" value="' . ($rnd ? '1' : '') . '"><input type="hidden" name="n" value="' . ($nd ?: '') . '">'
             . '<div class="scroll"><table><tr><th><input type="checkbox" onclick="for(const c of document.querySelectorAll(\'.sel\'))c.checked=this.checked"></th>'
@@ -160,7 +138,12 @@ try {
                 . '<td class="mut">' . h($r['naposledy'] ? substr($r['naposledy'], 0, 16) : '–') . '</td>'
                 . '<td><a href="?p=pridat&mac=' . urlencode($r['mac']) . '">upravit</a></td></tr>';
         }
-        echo '</table></div><p><button class="danger" name="delete" value="1">Smazat vybrané</button></p></form>';
+        echo '</table></div><p class="row"><button class="danger" name="delete" value="1" onclick="return confirm(\'Opravdu smazat vybraná zařízení?\')">Smazat vybrané</button>';
+        if ($f['active'] && $found > 0) {
+            echo '<button class="danger" name="delete_all" value="1" onclick="return confirm(\'Opravdu smazat všech ' . $found . ' nalezených zařízení?\')">'
+                . 'Smazat všech ' . $found . ' nalezených</button>';
+        }
+        echo '</p></form>';
         break;
 
     /* ---------- Pridat / upravit ---------- */
@@ -327,14 +310,6 @@ try {
             }
             redirect('?p=import');
         }
-        if ($post && isset($_POST['del_trida'])) {
-            $tr = trim((string)$_POST['trida']);
-            $st = db()->prepare('SELECT mac FROM mac_info WHERE trida = ?');
-            $st->execute([$tr]);
-            $n = delete_devices($st->fetchAll(PDO::FETCH_COLUMN));
-            flash("Smazáno zařízení třídy $tr: $n");
-            redirect('?p=import');
-        }
         page_header('Import / export', 'import');
         echo '<div class="card"><h2>Import</h2>'
             . '<p class="mut">Nahrajte celý soubor Excelu z MS Forms (.xlsx) nebo CSV, případně vložte sloupce zkopírované z Excelu. '
@@ -354,13 +329,6 @@ try {
         }
         echo '<div class="card"><h2>Export</h2><form method="post">' . csrf_field()
             . '<button name="export" value="1" class="sec">Stáhnout CSV</button></form></div>';
-        echo '<div class="card"><h2>Smazat celou třídu</h2><p class="mut">Např. po maturitě.</p>'
-            . '<form method="post" class="row" onsubmit="return confirm(\'Opravdu smazat všechna zařízení této třídy?\')">' . csrf_field()
-            . '<select name="trida" required><option value="">vyberte</option>';
-        foreach (db()->query("SELECT trida, COUNT(*) n FROM mac_info WHERE trida <> '' GROUP BY trida ORDER BY trida") as $r) {
-            echo '<option value="' . h($r['trida']) . '">' . h($r['trida']) . ' (' . (int)$r['n'] . ')</option>';
-        }
-        echo '</select><button class="danger" name="del_trida" value="1">Smazat</button></form></div>';
         break;
 
     /* ---------- Udrzba ---------- */
@@ -453,6 +421,7 @@ try {
 <a href="#import">Import</a> ·
 <a href="#udrzba">Údržba</a> ·
 <a href="#problemy">Když něco nefunguje</a> ·
+<a href="#certifikat">Certifikát a heslo v Chrome</a> ·
 <a href="#server">Server</a></p>
 </div>
 
@@ -473,7 +442,8 @@ Změna v seznamu platí hned pro další připojení – nic se nerestartuje.</p
 <li><strong>Naposledy</strong> – poslední úspěšné připojení k wifi. Historie se uchovává {$keepDays} dní, „–“ znamená, že se zařízení za tu dobu nepřipojilo.</li>
 <li><strong>Nepřihlášeno aspoň (dní)</strong> – zařízení, která se tak dlouho nepřipojila. Hodí se na úklid: vyfiltrovat, zaškrtnout vše v hlavičce tabulky, <em>Smazat vybrané</em>. Dokud historie nepokrývá zvolený počet dní, ukáže se červené upozornění, že výsledek není spolehlivý.</li>
 <li><strong>Smazaná zařízení si aplikace pamatuje</strong> a import z Forms je znovu nepřidá, i když jsou pořád v Excelu. Znovu povolit jde jen ručně přes <em>Přidat</em>.</li>
-<li>Zaškrtnutí všech v hlavičce platí jen pro aktuální stránku (max. 500 zařízení).</li>
+<li>Zaškrtnutí všech v hlavičce platí jen pro aktuální stránku (max. 500 zařízení). Když je zadaný nějaký filtr, tlačítko <strong>Smazat všech N nalezených</strong> smaže všechna nalezená zařízení i přes víc stránek.</li>
+<li><strong>Ročník po maturitě</strong> – vyberte třídu (např. <code>2022.a</code>), <em>Filtrovat</em> a <em>Smazat všech N nalezených</em>.</li>
 </ul>
 </div>
 
@@ -511,7 +481,6 @@ Server ho načítá sám každých 10 minut; tlačítkem <em>Načíst z OneDrive
 <li><strong>Upozornění e-mailem</strong> na {$alert} – když automatický import selže (OneDrive nedostupný, zrušené sdílení…): hned při první chybě, pak nejvýš jednou za 6 hodin a jednou po obnovení.</li>
 <li><strong>Výsledek importu</strong>: <em>Přidáno</em> – nové adresy; <em>Přeskočeno</em> – dříve smazaná zařízení; <em>Neplatná MAC</em> – odpovědi, které nejsou adresa (překlepy, IP adresa, text) – nic se z nich nepřidá; <em>Nově přidané náhodné</em> – viz <a href="#nahodne">náhodné adresy</a>.</li>
 <li><strong>CSV nebo vložený text</strong> – sloupce se záhlavím, nebo bez záhlaví v pořadí MAC; jméno; třída; poznámka.</li>
-<li><strong>Smazat celou třídu</strong> – např. ročník po maturitě (<code>2022.a</code>). Smazané adresy se importem znovu nepřidají.</li>
 </ul>
 </div>
 
@@ -535,6 +504,34 @@ Adresa tam není → zařízení se k síti GFP vůbec nepřipojuje (špatná s�
 <li><strong>Přišel e-mail, že import selhal</strong> – nejčastěji zrušené sdílení souboru na OneDrive nebo změněný odkaz; zkontrolujte <code>forms_url</code> a zkuste <em>Načíst z OneDrive</em>, chyba se ukáže.</li>
 <li><strong>Log hlásí BlastRADIUS / require_message_authenticator</strong> – jen doporučení; v <code>/etc/raddb/clients.conf</code> doplnit k danému klientovi <code>require_message_authenticator = yes</code> a restartovat radiusd.</li>
 </ul>
+</div>
+
+<div class="card help" id="certifikat">
+<h2>Certifikát a uložení hesla v Chrome</h2>
+<p>Chrome nenabízí uložení hesla na stránkách s neplatným certifikátem (u adresy „Nezabezpečeno“). Aplikace má vlastní certifikát pro adresu
+<code>192.168.0.1</code>; aby ho počítač bral jako platný, je potřeba ho jednou přidat mezi důvěryhodné.</p>
+<p><strong>Na serveru</strong> (jen pokud certifikát ještě není – <code>ls /etc/pki/tls/certs/macadmin.crt</code>):</p>
+<pre>openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+  -subj "/CN=192.168.0.1" -addext "subjectAltName=IP:192.168.0.1" \
+  -keyout /etc/pki/tls/private/macadmin.key -out /etc/pki/tls/certs/macadmin.crt
+chmod 600 /etc/pki/tls/private/macadmin.key
+restorecon /etc/pki/tls/private/macadmin.key /etc/pki/tls/certs/macadmin.crt
+cat &gt; /etc/httpd/conf.d/00-default-ssl.conf &lt;&lt;'EOF'
+&lt;VirtualHost _default_:443&gt;
+    SSLEngine on
+    SSLCertificateFile /etc/pki/tls/certs/macadmin.crt
+    SSLCertificateKeyFile /etc/pki/tls/private/macadmin.key
+&lt;/VirtualHost&gt;
+EOF
+apachectl configtest &amp;&amp; systemctl reload httpd</pre>
+<p><strong>Na počítači (Windows):</strong></p>
+<ol>
+<li>Přes SFTP (Bitvise) stáhnout <code>/etc/pki/tls/certs/macadmin.crt</code>.</li>
+<li>Dvakrát kliknout → <em>Nainstalovat certifikát</em> → <em>Aktuální uživatel</em> → <em>Všechny certifikáty umístit do následujícího úložiště</em> →
+<em>Důvěryhodné kořenové certifikační autority</em> → Dokončit a potvrdit.</li>
+<li>Zavřít všechna okna Chrome a znovu otevřít <code>https://192.168.0.1/macadmin/</code> – u adresy je zámek a po přihlášení Chrome nabídne uložení hesla.</li>
+</ol>
+<p>Certifikát platí 10 let. Na jiném počítači stačí zopakovat krok na počítači. Bez certifikátu jde heslo uložit ručně v <code>chrome://password-manager/passwords</code> → <em>Přidat</em>.</p>
 </div>
 
 <div class="card help" id="server">

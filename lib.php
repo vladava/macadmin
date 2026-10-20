@@ -270,6 +270,55 @@ function prune_postauth(int $days, int $batch = 20000): int
     return $total;
 }
 
+/**
+ * Filtr seznamu zarizeni z parametru (GET nebo POST): q, t, l, r, n.
+ * Vraci hodnoty filtru, podminky WHERE a jejich parametry; 'active' = je zadany aspon jeden filtr.
+ */
+function device_filter(array $src): array
+{
+    $q = trim((string)($src['q'] ?? ''));
+    $t = trim((string)($src['t'] ?? ''));
+    $l = (string)($src['l'] ?? '');
+    $l = preg_match('/^[a-z]$/', $l) ? $l : ''; // pismeno tridy za rokem nastupu (2026.g)
+    $rnd = !empty($src['r']);
+    $nd = max(0, min((int)($src['n'] ?? 0), 3650)); // neprihlaseno alespon nd dni
+    $where = ['r.attribute = ?'];
+    $args = [cfg('radcheck_attribute')];
+    if ($q !== '') {
+        $like = '%' . addcslashes($q, '%_\\') . '%';
+        $cond = ['r.username LIKE ?', 'i.jmeno LIKE ?', 'i.poznamka LIKE ?'];
+        $args = array_merge($args, [$like, $like, $like]);
+        // cast MAC v jinem zapisu (napr. 0b9a05b7) hledat i bez oddelovacu - jen kdyz dotaz vypada jako MAC
+        $hex = preg_replace('/[^0-9A-Fa-f]/', '', $q);
+        if (strlen($hex) >= 4 && preg_match('/^[0-9A-Fa-f:.\s-]+$/', $q)) {
+            $cond[] = "REPLACE(REPLACE(REPLACE(r.username, ':', ''), '-', ''), '.', '') LIKE ?";
+            $args[] = '%' . $hex . '%';
+        }
+        $where[] = '(' . implode(' OR ', $cond) . ')';
+    }
+    if ($t !== '') {
+        $where[] = 'i.trida = ?';
+        $args[] = $t;
+    }
+    if ($l !== '') {
+        $where[] = "i.trida LIKE ?";
+        $args[] = '____.' . $l;
+    }
+    if ($rnd) {
+        // stejne pravidlo jako is_random_mac(): druhy hexa znak 2, 6, A nebo E
+        $where[] = "UPPER(SUBSTRING(REPLACE(REPLACE(REPLACE(r.username, ':', ''), '-', ''), '.', ''), 2, 1)) IN ('2', '6', 'A', 'E')";
+    }
+    if ($nd > 0) {
+        $where[] = "NOT EXISTS (SELECT 1 FROM radpostauth p WHERE p.username = r.username
+                     AND p.reply = 'Access-Accept' AND p.authdate > NOW() - INTERVAL ? DAY)";
+        $args[] = $nd;
+    }
+    return [
+        'q' => $q, 't' => $t, 'l' => $l, 'r' => $rnd, 'n' => $nd, 'where' => $where, 'args' => $args,
+        'active' => $q !== '' || $t !== '' || $l !== '' || $rnd || $nd > 0,
+    ];
+}
+
 /* ---------- Import (Excel z MS Forms, CSV, vlozeny text) ---------- */
 
 /**
@@ -667,5 +716,6 @@ button.link{background:none;border:0;color:var(--acc);padding:0}
 .tag{display:inline-block;font-size:12px;padding:1px 6px;border-radius:4px;background:var(--warn)}.mut{color:var(--mut)}
 .scroll{overflow-x:auto}
 .help p,.help li{max-width:80ch}.help li{margin:0 0 6px}.help h2{margin-top:4px}.help th{white-space:nowrap}
+.help pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;overflow-x:auto;font-size:13px}
 CSS;
 }
