@@ -3,6 +3,7 @@ declare(strict_types=1);
 require __DIR__ . '/lib.php';
 
 start_session();
+ob_start(); // pri chybe DB zahodit rozpracovanou stranku
 $p = $_GET['p'] ?? 'zarizeni';
 $post = $_SERVER['REQUEST_METHOD'] === 'POST';
 
@@ -34,6 +35,9 @@ try {
 
     /* ---------- Odhlaseni ---------- */
     case 'logout':
+        if (!$post) {
+            redirect('?p=zarizeni');
+        }
         $_SESSION = [];
         session_destroy();
         redirect('?p=login');
@@ -41,32 +45,48 @@ try {
     /* ---------- Seznam zarizeni ---------- */
     case 'zarizeni':
         if ($post && isset($_POST['delete'])) {
-            $macs = array_values(array_filter(array_map('normalize_mac', (array)($_POST['mac'] ?? []))));
+            // presny zapis z databaze, aby sly smazat i nestandardni a neplatne zaznamy
+            $macs = array_values(array_filter(array_map('strval', (array)($_POST['mac'] ?? [])), fn($m) => $m !== ''));
             $n = delete_devices($macs);
             flash("Smazáno zařízení: $n");
             redirect('?p=zarizeni&' . http_build_query(['q' => $_POST['q'] ?? '', 't' => $_POST['t'] ?? '']));
         }
         $q = trim((string)($_GET['q'] ?? ''));
         $t = trim((string)($_GET['t'] ?? ''));
+        $s = max(1, (int)($_GET['s'] ?? 1));
+        $perPage = 500;
         $where = ['r.attribute = ?'];
         $args = [cfg('radcheck_attribute')];
         if ($q !== '') {
-            $where[] = '(r.username LIKE ? OR i.jmeno LIKE ? OR i.poznamka LIKE ? OR REPLACE(r.username, ":", "") LIKE ?)';
-            $like = '%' . $q . '%';
-            $args = array_merge($args, [$like, $like, $like, '%' . preg_replace('/[^0-9A-Fa-f]/', '', $q) . '%']);
+            $like = '%' . addcslashes($q, '%_\\') . '%';
+            $cond = ['r.username LIKE ?', 'i.jmeno LIKE ?', 'i.poznamka LIKE ?'];
+            $args = array_merge($args, [$like, $like, $like]);
+            // cast MAC v jinem zapisu (napr. 0b9a05b7) hledat i bez oddelovacu - jen kdyz dotaz vypada jako MAC
+            $hex = preg_replace('/[^0-9A-Fa-f]/', '', $q);
+            if (strlen($hex) >= 4 && preg_match('/^[0-9A-Fa-f:.\s-]+$/', $q)) {
+                $cond[] = "REPLACE(REPLACE(REPLACE(r.username, ':', ''), '-', ''), '.', '') LIKE ?";
+                $args[] = '%' . $hex . '%';
+            }
+            $where[] = '(' . implode(' OR ', $cond) . ')';
         }
         if ($t !== '') {
             $where[] = 'i.trida = ?';
             $args[] = $t;
         }
-        $sql = 'SELECT r.username AS mac, i.jmeno, i.trida, i.poznamka, i.vytvoreno
-                FROM radcheck r LEFT JOIN mac_info i ON i.mac = r.username
-                WHERE ' . implode(' AND ', $where) . ' ORDER BY i.trida, i.jmeno, r.username LIMIT 2000';
-        $st = db()->prepare($sql);
+        $from = 'FROM radcheck r LEFT JOIN mac_info i ON i.mac = r.username WHERE ' . implode(' AND ', $where);
+        $st = db()->prepare("SELECT COUNT(*) $from");
+        $st->execute($args);
+        $found = (int)$st->fetchColumn();
+        $pages = max(1, (int)ceil($found / $perPage));
+        $s = min($s, $pages);
+        $st = db()->prepare("SELECT r.username AS mac, i.jmeno, i.trida, i.poznamka, i.vytvoreno $from
+                ORDER BY i.trida, i.jmeno, r.username LIMIT $perPage OFFSET " . (($s - 1) * $perPage));
         $st->execute($args);
         $rows = $st->fetchAll();
         $tridy = db()->query("SELECT trida, COUNT(*) n FROM mac_info WHERE trida <> '' GROUP BY trida ORDER BY trida")->fetchAll();
-        $total = (int)db()->query('SELECT COUNT(*) FROM radcheck')->fetchColumn();
+        $st = db()->prepare('SELECT COUNT(*) FROM radcheck WHERE attribute = ?');
+        $st->execute([cfg('radcheck_attribute')]);
+        $total = (int)$st->fetchColumn();
 
         page_header('Zařízení', 'zarizeni');
         echo '<form class="row" method="get"><input type="hidden" name="p" value="zarizeni">'
@@ -77,7 +97,15 @@ try {
                 . h($tr['trida']) . ' (' . (int)$tr['n'] . ')</option>';
         }
         echo '</select></label><button>Filtrovat</button></form>';
-        echo '<p class="mut">Zobrazeno ' . count($rows) . ' z ' . $total . ' povolených zařízení.</p>';
+        echo '<p class="mut">Nalezeno ' . $found . ' z ' . $total . ' povolených zařízení.';
+        if ($pages > 1) {
+            $link = fn($n) => '?' . http_build_query(['p' => 'zarizeni', 'q' => $q, 't' => $t, 's' => $n]);
+            echo ' Stránka ' . $s . ' z ' . $pages . ':';
+            for ($i = 1; $i <= $pages; $i++) {
+                echo ' ' . ($i === $s ? '<strong>' . $i . '</strong>' : '<a href="' . h($link($i)) . '">' . $i . '</a>');
+            }
+        }
+        echo '</p>';
         echo '<form method="post" onsubmit="return confirm(\'Opravdu smazat vybraná zařízení?\')">' . csrf_field()
             . '<input type="hidden" name="q" value="' . h($q) . '"><input type="hidden" name="t" value="' . h($t) . '">'
             . '<div class="scroll"><table><tr><th><input type="checkbox" onclick="for(const c of document.querySelectorAll(\'.sel\'))c.checked=this.checked"></th>'
@@ -96,27 +124,42 @@ try {
     case 'pridat':
         if ($post) {
             $mac = normalize_mac((string)($_POST['mac'] ?? ''));
-            $old = isset($_POST['old']) && $_POST['old'] !== '' ? normalize_mac((string)$_POST['old']) : null;
+            // puvodni zapis v databazi (muze byt nestandardni nebo neplatny)
+            $old = (string)($_POST['old'] ?? '');
+            $old = $old !== '' ? $old : null;
             if ($mac === null) {
                 flash('Neplatná MAC adresa.', 'err');
-                redirect('?p=pridat');
+                redirect('?p=pridat' . ($old !== null ? '&mac=' . urlencode($old) : ''));
             }
-            if ($old !== null && $old !== $mac && mac_exists($mac)) {
+            if ($old === null && mac_exists($mac)) {
+                flash("Adresa $mac už v seznamu je, zde ji můžete upravit.", 'err');
+                redirect('?p=pridat&mac=' . urlencode($mac));
+            }
+            if ($old !== null && normalize_mac($old) !== $mac && mac_exists($mac)) {
                 flash("Adresa $mac už v seznamu je.", 'err');
                 redirect('?p=pridat&mac=' . urlencode($old));
             }
-            $res = save_device($mac, trim((string)$_POST['jmeno']), trim((string)$_POST['trida']), trim((string)$_POST['poznamka']), $old);
+            $res = save_device(
+                $mac,
+                mb_substr(trim((string)($_POST['jmeno'] ?? '')), 0, 100),
+                mb_substr(trim((string)($_POST['trida'] ?? '')), 0, 20),
+                mb_substr(trim((string)($_POST['poznamka'] ?? '')), 0, 255),
+                $old
+            );
             flash($res === 'added' ? "Přidáno: $mac" : "Uloženo: $mac");
             if (is_random_mac($mac)) {
                 flash("Pozor: $mac je náhodná (soukromá) adresa, telefon ji může časem změnit.", 'err');
             }
             redirect(isset($_POST['zpet']) && $_POST['zpet'] === 'zamitnuta' ? '?p=zamitnuta' : '?p=pridat');
         }
-        $edit = isset($_GET['mac']) ? normalize_mac((string)$_GET['mac']) : null;
-        $d = ['mac' => $edit ?? '', 'jmeno' => '', 'trida' => '', 'poznamka' => ''];
-        $isEdit = false;
-        if ($edit !== null && mac_exists($edit)) {
-            $isEdit = true;
+        $arg = trim((string)($_GET['mac'] ?? ''));
+        $norm = $arg !== '' ? normalize_mac($arg) : null;
+        // presny zapis v databazi; odkaz ze seznamu nese i nestandardni zapis
+        $edit = $arg !== '' ? (find_mac($arg) ?? ($norm !== null ? find_mac($norm) : null)) : null;
+        $d = ['mac' => $norm ?? '', 'jmeno' => '', 'trida' => '', 'poznamka' => ''];
+        $isEdit = $edit !== null;
+        if ($isEdit) {
+            $d['mac'] = normalize_mac($edit) ?? $edit;
             $st = db()->prepare('SELECT jmeno, trida, poznamka FROM mac_info WHERE mac = ?');
             $st->execute([$edit]);
             $d = array_merge($d, $st->fetch() ?: []);
@@ -125,12 +168,19 @@ try {
         page_header($isEdit ? 'Upravit zařízení' : 'Přidat zařízení', 'pridat');
         echo '<form method="post" class="card">' . csrf_field()
             . ($isEdit ? '<input type="hidden" name="old" value="' . h($edit) . '">' : '')
+            . ($isEdit && normalize_mac($edit) !== $edit
+                ? '<p class="flash err">V databázi je zapsáno nestandardně: <code>[' . h($edit) . ']</code>. Uložením se zápis opraví.</p>' : '')
             . '<input type="hidden" name="zpet" value="' . h($zpet) . '">'
             . '<div class="row"><label>MAC adresa (libovolný zápis)<input name="mac" class="mono" required value="' . h($d['mac']) . '" placeholder="AA:BB:CC:DD:EE:FF" size="22"></label>'
-            . '<label>Jméno<input name="jmeno" value="' . h($d['jmeno']) . '" size="26"></label>'
-            . '<label>Třída<input name="trida" value="' . h($d['trida']) . '" size="8" list="tridy"></label>'
-            . '<label>Poznámka<input name="poznamka" value="' . h($d['poznamka']) . '" size="30"></label></div>'
+            . '<label>Jméno<input name="jmeno" value="' . h($d['jmeno']) . '" size="26" maxlength="100"></label>'
+            . '<label>Třída<input name="trida" value="' . h($d['trida']) . '" size="8" maxlength="20" list="tridy"></label>'
+            . '<label>Poznámka<input name="poznamka" value="' . h($d['poznamka']) . '" size="30" maxlength="255"></label></div>'
             . '<button>' . ($isEdit ? 'Uložit' : 'Přidat') . '</button></form>';
+        if ($isEdit) {
+            echo '<form method="post" action="?p=zarizeni" onsubmit="return confirm(\'Opravdu smazat toto zařízení?\')">' . csrf_field()
+                . '<input type="hidden" name="mac[]" value="' . h($edit) . '">'
+                . '<button class="danger" name="delete" value="1">Smazat zařízení</button></form>';
+        }
         echo '<datalist id="tridy">';
         foreach (db()->query("SELECT DISTINCT trida FROM mac_info WHERE trida <> '' ORDER BY trida") as $r) {
             echo '<option value="' . h($r['trida']) . '">';
@@ -171,17 +221,19 @@ try {
     /* ---------- Import / export ---------- */
     case 'import':
         if ($post && isset($_POST['export'])) {
-            $rows = db()->query(
+            $st = db()->prepare(
                 'SELECT r.username AS mac, i.jmeno, i.trida, i.poznamka FROM radcheck r
-                 LEFT JOIN mac_info i ON i.mac = r.username ORDER BY i.trida, i.jmeno'
-            )->fetchAll();
+                 LEFT JOIN mac_info i ON i.mac = r.username WHERE r.attribute = ? ORDER BY i.trida, i.jmeno'
+            );
+            $st->execute([cfg('radcheck_attribute')]);
+            $rows = $st->fetchAll();
             header('Content-Type: text/csv; charset=utf-8');
             header('Content-Disposition: attachment; filename="mac-gfp-' . date('Y-m-d') . '.csv"');
             $out = fopen('php://output', 'w');
             fwrite($out, "\xEF\xBB\xBF"); // BOM pro Excel
-            fputcsv($out, ['mac', 'jmeno', 'trida', 'poznamka'], ';');
+            fputcsv($out, ['mac', 'jmeno', 'trida', 'poznamka'], ';', '"', '\\');
             foreach ($rows as $r) {
-                fputcsv($out, [$r['mac'], $r['jmeno'], $r['trida'], $r['poznamka']], ';');
+                fputcsv($out, [$r['mac'], $r['jmeno'], $r['trida'], $r['poznamka']], ';', '"', '\\');
             }
             exit;
         }
@@ -257,43 +309,26 @@ try {
             redirect('?p=udrzba');
         }
         if ($post && isset($_POST['normalize'])) {
-            $pdo = db();
-            $rows = $pdo->query('SELECT id, username FROM radcheck')->fetchAll();
-            $fixed = $dupl = 0;
-            foreach ($rows as $r) {
-                $n = normalize_mac($r['username']);
-                if ($n === null || $n === $r['username']) {
-                    continue;
-                }
-                // existuje uz JINY radek s presne timto zapisem? (BINARY = presne porovnani vcetne mezer a velikosti pismen)
-                $dup = $pdo->prepare('SELECT 1 FROM radcheck WHERE BINARY username = ? AND attribute = ? AND id <> ? LIMIT 1');
-                $dup->execute([$n, cfg('radcheck_attribute'), $r['id']]);
-                if ($dup->fetchColumn()) {
-                    $pdo->prepare('DELETE FROM radcheck WHERE id = ?')->execute([$r['id']]);
-                    $pdo->prepare('DELETE FROM mac_info WHERE BINARY mac = ?')->execute([$r['username']]);
-                    $dupl++;
-                } else {
-                    $pdo->prepare('UPDATE radcheck SET username = ? WHERE id = ?')->execute([$n, $r['id']]);
-                    $pdo->prepare('UPDATE mac_info SET mac = ? WHERE BINARY mac = ?')->execute([$n, $r['username']]);
-                    $fixed++;
-                }
-            }
-            flash("Opraveno zápisů: $fixed, odstraněno duplicit: $dupl");
+            [$fixed, $dupl] = fix_mac_format();
+            flash("Opraveno zápisů: $fixed, sloučeno duplicit: $dupl");
             redirect('?p=udrzba');
         }
         $pdo = db();
+        $st = $pdo->prepare('SELECT username FROM radcheck WHERE attribute = ?');
+        $st->execute([cfg('radcheck_attribute')]);
+        $macs = $st->fetchAll(PDO::FETCH_COLUMN);
         $stats = [
-            'Povolených zařízení'            => $pdo->query('SELECT COUNT(*) FROM radcheck')->fetchColumn(),
+            'Povolených zařízení'            => count($macs),
             'Záznamů přihlášení celkem'      => $pdo->query('SELECT COUNT(*) FROM radpostauth')->fetchColumn(),
             'Nejstarší záznam přihlášení'    => $pdo->query('SELECT MIN(authdate) FROM radpostauth')->fetchColumn(),
             'Povoleno za 24 h'               => $pdo->query("SELECT COUNT(*) FROM radpostauth WHERE reply='Access-Accept' AND authdate > NOW() - INTERVAL 1 DAY")->fetchColumn(),
             'Zamítnuto za 24 h'              => $pdo->query("SELECT COUNT(*) FROM radpostauth WHERE reply='Access-Reject' AND authdate > NOW() - INTERVAL 1 DAY")->fetchColumn(),
         ];
         $bad = [];
-        foreach ($pdo->query('SELECT username FROM radcheck') as $r) {
-            $n = normalize_mac($r['username']);
-            if ($n !== $r['username']) {
-                $bad[] = [$r['username'], $n];
+        foreach (array_unique($macs) as $u) {
+            $n = normalize_mac((string)$u);
+            if ($n !== $u) {
+                $bad[] = [(string)$u, $n];
             }
         }
         page_header('Údržba', 'udrzba');
@@ -310,7 +345,7 @@ try {
         if ($bad) {
             echo '<div class="scroll"><table><tr><th>V databázi</th><th>Opraveno na</th></tr>';
             foreach (array_slice($bad, 0, 200) as [$o, $n]) {
-                echo '<tr><td class="mono">[' . h($o) . ']</td><td class="mono">' . h($n ?? 'neplatná – opravte ručně') . '</td></tr>';
+                echo '<tr><td class="mono">[' . h($o) . ']</td><td class="mono">' . ($n !== null ? h($n) : 'neplatná – <a href="?p=pridat&mac=' . urlencode($o) . '">opravit nebo smazat</a>') . '</td></tr>';
             }
             echo '</table></div><form method="post" style="margin-top:8px">' . csrf_field()
                 . '<button name="normalize" value="1">Opravit zápis</button></form>';
@@ -323,6 +358,9 @@ try {
     }
 } catch (PDOException $e) {
     error_log('macadmin: ' . $e->getMessage());
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
     page_header('Chyba');
     echo '<div class="flash err">Chyba databáze: ' . h($e->getMessage()) . '</div>';
 }

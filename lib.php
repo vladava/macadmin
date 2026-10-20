@@ -65,6 +65,9 @@ function start_session(): void
     ]);
     session_start();
     $t = (int)cfg('session_timeout');
+    if ($t <= 0) {
+        $t = 3600; // chybi nebo nesmyslna hodnota v config.php
+    }
     if (isset($_SESSION['last']) && time() - $_SESSION['last'] > $t) {
         $_SESSION = [];
         session_regenerate_id(true);
@@ -119,14 +122,79 @@ function redirect(string $url): never
 
 /* ---------- Prace s MAC adresami ---------- */
 
-function mac_exists(string $mac): bool
+/** Vrati zapis MAC presne tak, jak je ulozen v radcheck (muze byt nestandardni), nebo null. */
+function find_mac(string $mac): ?string
 {
-    $st = db()->prepare('SELECT 1 FROM radcheck WHERE username = ? AND attribute = ? LIMIT 1');
+    $st = db()->prepare('SELECT username FROM radcheck WHERE username = ? AND attribute = ? LIMIT 1');
     $st->execute([$mac, cfg('radcheck_attribute')]);
-    return (bool)$st->fetchColumn();
+    $u = $st->fetchColumn();
+    return $u === false ? null : (string)$u;
 }
 
-/** Prida nebo aktualizuje zarizeni. Vraci 'added' | 'updated'. */
+function mac_exists(string $mac): bool
+{
+    return find_mac($mac) !== null;
+}
+
+/**
+ * Prejmenuje zaznam $old (presny zapis vcetne velikosti pismen) na $new v radcheck i mac_info.
+ * Pokud $new uz v radcheck je, stary zaznam smaze a udaje z mac_info slouci (doplni prazdna pole).
+ * Vraci true, kdyz doslo ke slouceni. Volat uvnitr transakce.
+ */
+function rename_mac(string $old, string $new): bool
+{
+    $pdo = db();
+    $st = $pdo->prepare('SELECT 1 FROM radcheck WHERE BINARY username = ? LIMIT 1');
+    $st->execute([$new]);
+    $merged = (bool)$st->fetchColumn();
+    if ($merged) {
+        $pdo->prepare('DELETE FROM radcheck WHERE BINARY username = ?')->execute([$old]);
+    } else {
+        $pdo->prepare('UPDATE radcheck SET username = ? WHERE BINARY username = ?')->execute([$new, $old]);
+    }
+    $st = $pdo->prepare('SELECT jmeno, trida, poznamka, vytvoreno FROM mac_info WHERE BINARY mac = ?');
+    $st->execute([$old]);
+    if ($info = $st->fetch()) {
+        $pdo->prepare('DELETE FROM mac_info WHERE BINARY mac = ?')->execute([$old]);
+        $pdo->prepare(
+            "INSERT INTO mac_info (mac, jmeno, trida, poznamka, vytvoreno) VALUES (?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+               jmeno = IF(jmeno = '', VALUES(jmeno), jmeno),
+               trida = IF(trida = '', VALUES(trida), trida),
+               poznamka = IF(poznamka = '', VALUES(poznamka), poznamka)"
+        )->execute([$new, $info['jmeno'], $info['trida'], $info['poznamka'], $info['vytvoreno']]);
+    }
+    return $merged;
+}
+
+/** Sjednoti zapis vsech MAC v radcheck na AA:BB:CC:DD:EE:FF. Vraci [opraveno, slouceno duplicit]. */
+function fix_mac_format(): array
+{
+    $pdo = db();
+    $st = $pdo->prepare('SELECT username FROM radcheck WHERE attribute = ?');
+    $st->execute([cfg('radcheck_attribute')]);
+    $fixed = $merged = 0;
+    foreach (array_unique($st->fetchAll(PDO::FETCH_COLUMN)) as $u) {
+        $n = normalize_mac((string)$u);
+        if ($n === null || $n === $u) {
+            continue;
+        }
+        $pdo->beginTransaction();
+        try {
+            rename_mac((string)$u, $n) ? $merged++ : $fixed++;
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+    }
+    return [$fixed, $merged];
+}
+
+/**
+ * Prida nebo aktualizuje zarizeni. $oldMac je puvodni zapis v radcheck (i nestandardni).
+ * Vraci 'added' | 'updated'.
+ */
 function save_device(string $mac, string $jmeno, string $trida, string $poznamka, ?string $oldMac = null): string
 {
     $pdo = db();
@@ -134,9 +202,8 @@ function save_device(string $mac, string $jmeno, string $trida, string $poznamka
     try {
         $result = 'updated';
         if ($oldMac !== null && $oldMac !== $mac) {
-            // zmena MAC: prejmenovat zaznam
-            $pdo->prepare('UPDATE radcheck SET username = ? WHERE username = ?')->execute([$mac, $oldMac]);
-            $pdo->prepare('DELETE FROM mac_info WHERE mac = ?')->execute([$oldMac]);
+            // zmena MAC nebo oprava zapisu: prejmenovat zaznam
+            rename_mac($oldMac, $mac);
         }
         if (!mac_exists($mac)) {
             $pdo->prepare('INSERT INTO radcheck (username, attribute, op, value) VALUES (?, ?, ?, ?)')
@@ -163,12 +230,17 @@ function delete_devices(array $macs): int
     $pdo = db();
     $in = implode(',', array_fill(0, count($macs), '?'));
     $pdo->beginTransaction();
-    $st = $pdo->prepare("DELETE FROM radcheck WHERE username IN ($in)");
-    $st->execute($macs);
-    $n = $st->rowCount();
-    $pdo->prepare("DELETE FROM mac_info WHERE mac IN ($in)")->execute($macs);
-    $pdo->commit();
-    return $n;
+    try {
+        $st = $pdo->prepare("DELETE FROM radcheck WHERE username IN ($in)");
+        $st->execute($macs);
+        $n = $st->rowCount();
+        $pdo->prepare("DELETE FROM mac_info WHERE mac IN ($in)")->execute($macs);
+        $pdo->commit();
+        return $n;
+    } catch (Throwable $e) {
+        $pdo->rollBack();
+        throw $e;
+    }
 }
 
 /** Smaze stare zaznamy z radpostauth po davkach. Vraci pocet smazanych radku. */
@@ -262,7 +334,12 @@ function parse_text_table(string $raw): array
 {
     $raw = preg_replace('/^\xEF\xBB\xBF/', '', $raw);
     if (!mb_check_encoding($raw, 'UTF-8')) {
-        $raw = mb_convert_encoding($raw, 'UTF-8', 'Windows-1250'); // CSV z ceskeho Excelu
+        // CSV z ceskeho Excelu; mbstring Windows-1250 nezna, proto iconv
+        $conv = @iconv('CP1250', 'UTF-8', $raw);
+        if ($conv === false) {
+            throw new RuntimeException('Soubor není v kódování UTF-8 ani Windows-1250.');
+        }
+        $raw = $conv;
     }
     $lines = array_values(array_filter(preg_split('/\r\n|\r|\n/', $raw), fn($l) => trim($l) !== ''));
     if (!$lines) {
@@ -273,7 +350,7 @@ function parse_text_table(string $raw): array
     if (!str_contains($first, "\t")) {
         $sep = substr_count($first, ';') >= substr_count($first, ',') ? ';' : ',';
     }
-    return array_map(fn($l) => array_map('trim', str_getcsv($l, $sep)), $lines);
+    return array_map(fn($l) => array_map('trim', str_getcsv($l, $sep, '"', '\\')), $lines);
 }
 
 /**

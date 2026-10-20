@@ -141,12 +141,12 @@ chown root:apache /var/www/macadmin/config.php
 chmod 640 /var/www/macadmin/config.php
 setsebool -P httpd_can_network_connect_db 1
 restorecon -R /var/www/macadmin
-firewall-cmd --permanent --add-service=https
+firewall-cmd --permanent --add-service=http --add-service=https
 firewall-cmd --reload
 systemctl enable --now httpd
 ```
 
-Rozhraní: `https://IP-NOVEHO-SERVERU/macadmin/` (přístup jen z 192.168.0.0/24, viz `macadmin.conf`).
+Rozhraní: `https://IP-NOVEHO-SERVERU/macadmin/` (přístup jen z 192.168.0.0/24, viz `macadmin.conf`; HTTP se přesměruje na HTTPS).
 
 Registrace z MS Forms: v rozhraní **Import / export** nahrajte pokaždé celý stažený Excel z Forms. Sloupce MAC, jméno, třída a e-mail se najdou podle záhlaví, přidají se jen nové adresy a vypíšou se neplatné a náhodné MAC.
 
