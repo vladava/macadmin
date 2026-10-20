@@ -619,6 +619,7 @@ function page_header(string $title, string $active = ''): void
         'zamitnuta' => 'Zamítnutá',
         'import'    => 'Import / export',
         'udrzba'    => 'Údržba',
+        'napoveda'  => 'Nápověda',
     ];
     echo '<!doctype html><html lang="cs"><head><meta charset="utf-8">'
         . '<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -665,5 +666,6 @@ button.link{background:none;border:0;color:var(--acc);padding:0}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:0 0 16px}
 .tag{display:inline-block;font-size:12px;padding:1px 6px;border-radius:4px;background:var(--warn)}.mut{color:var(--mut)}
 .scroll{overflow-x:auto}
+.help p,.help li{max-width:80ch}.help li{margin:0 0 6px}.help h2{margin-top:4px}.help th{white-space:nowrap}
 CSS;
 }

@@ -13,7 +13,7 @@ Náhrada za daloRADIUS. Jednoduchá PHP 8 aplikace (bez frameworku) nad databáz
 - Jediný uživatel rozhraní je správce (jeden účet v `config.php`, heslo jako hash).
 
 ## Struktura
-- `index.php` – všechny stránky (`?p=zarizeni|pridat|zamitnuta|import|udrzba|login|logout`)
+- `index.php` – všechny stránky (`?p=zarizeni|pridat|zamitnuta|import|udrzba|napoveda|login|logout`); nápověda pro správce je stránka `napoveda` – při změně chování ji aktualizovat
 - `lib.php` – DB, přihlášení, CSRF, normalizace MAC, čtení XLSX (ZipArchive + SimpleXML, bez knihoven), import, vzhled
 - `udrzba.php` – CLI skript pro cron (promazání `radpostauth`)
 - `import-forms.php` – CLI skript pro cron (import Excelu z Forms z OneDrive podle `forms_url`)
