@@ -18,6 +18,20 @@ CREATE TABLE IF NOT EXISTS mac_smazane (
   smazano    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- udaje smazaneho zarizeni pro obnoveni; smazano = davka (stejny cas pro jedno smazani)
+ALTER TABLE mac_smazane
+  ADD COLUMN IF NOT EXISTS jmeno    VARCHAR(100) NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS trida    VARCHAR(20)  NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS poznamka VARCHAR(255) NOT NULL DEFAULT '',
+  ADD INDEX IF NOT EXISTS smazano (smazano);
+
+-- Stav automatickych uloh (import z OneDrive, nocni zaloha) pro zobrazeni v Udrzbe
+CREATE TABLE IF NOT EXISTS macadmin_stav (
+  klic       VARCHAR(50)  NOT NULL PRIMARY KEY,
+  hodnota    TEXT         NOT NULL,
+  zmeneno    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- Index pro rychle hledani podle data (zamitnuta zarizeni, promazavani)
 -- (IF NOT EXISTS: skript jde spustit opakovane)
 ALTER TABLE radpostauth ADD INDEX IF NOT EXISTS authdate (authdate);
@@ -30,5 +44,6 @@ CREATE USER IF NOT EXISTS 'macadmin'@'localhost' IDENTIFIED BY 'ZMENTE_HESLO';
 GRANT SELECT, INSERT, UPDATE, DELETE ON radius.radcheck    TO 'macadmin'@'localhost';
 GRANT SELECT, INSERT, UPDATE, DELETE ON radius.mac_info    TO 'macadmin'@'localhost';
 GRANT SELECT, INSERT, UPDATE, DELETE ON radius.mac_smazane TO 'macadmin'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE ON radius.macadmin_stav TO 'macadmin'@'localhost';
 GRANT SELECT, DELETE                 ON radius.radpostauth TO 'macadmin'@'localhost';
 FLUSH PRIVILEGES;

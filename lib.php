@@ -229,7 +229,10 @@ function save_device(string $mac, string $jmeno, string $trida, string $poznamka
     }
 }
 
-/** Smaze zarizeni a zapamatuje si je, aby je import ze souboru Forms znovu nepridal. */
+/**
+ * Smaze zarizeni a zapamatuje si je i s udaji (mac_smazane), aby je import ze souboru Forms znovu nepridal
+ * a aby se dala obnovit. Jedno volani = jedna davka se stejnym casem smazani.
+ */
 function delete_devices(array $macs): int
 {
     if (!$macs) {
@@ -239,14 +242,25 @@ function delete_devices(array $macs): int
     $in = implode(',', array_fill(0, count($macs), '?'));
     $pdo->beginTransaction();
     try {
+        $now = $pdo->query('SELECT NOW()')->fetchColumn();
+        $info = [];
+        $st = $pdo->prepare("SELECT mac, jmeno, trida, poznamka FROM mac_info WHERE mac IN ($in)");
+        $st->execute($macs);
+        foreach ($st as $r) {
+            $info[normalize_mac((string)$r['mac']) ?? $r['mac']] = $r;
+        }
         $st = $pdo->prepare("DELETE FROM radcheck WHERE username IN ($in)");
         $st->execute($macs);
         $n = $st->rowCount();
         $pdo->prepare("DELETE FROM mac_info WHERE mac IN ($in)")->execute($macs);
-        $mark = $pdo->prepare('INSERT INTO mac_smazane (mac) VALUES (?) ON DUPLICATE KEY UPDATE smazano = CURRENT_TIMESTAMP');
+        $mark = $pdo->prepare(
+            'INSERT INTO mac_smazane (mac, smazano, jmeno, trida, poznamka) VALUES (?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE smazano = VALUES(smazano), jmeno = VALUES(jmeno), trida = VALUES(trida), poznamka = VALUES(poznamka)'
+        );
         foreach ($macs as $m) {
             if (($norm = normalize_mac((string)$m)) !== null) {
-                $mark->execute([$norm]);
+                $i = $info[$norm] ?? ['jmeno' => '', 'trida' => '', 'poznamka' => ''];
+                $mark->execute([$norm, $now, $i['jmeno'], $i['trida'], $i['poznamka']]);
             }
         }
         $pdo->commit();
@@ -255,6 +269,91 @@ function delete_devices(array $macs): int
         $pdo->rollBack();
         throw $e;
     }
+}
+
+/** Obnovi smazana zarizeni i s ulozenymi udaji. Vraci pocet obnovenych. */
+function restore_devices(array $macs): int
+{
+    $st = db()->prepare('SELECT mac, jmeno, trida, poznamka FROM mac_smazane WHERE mac = ?');
+    $n = 0;
+    foreach ($macs as $m) {
+        $st->execute([(string)$m]);
+        if ($r = $st->fetch()) {
+            save_device($r['mac'], $r['jmeno'], $r['trida'], $r['poznamka']); // smaze i zaznam v mac_smazane
+            $n++;
+        }
+    }
+    return $n;
+}
+
+/** Zapomene smazana zarizeni - pristi import z Forms je zase prida. */
+function forget_deleted(array $macs): int
+{
+    if (!$macs) {
+        return 0;
+    }
+    $st = db()->prepare('DELETE FROM mac_smazane WHERE mac IN (' . implode(',', array_fill(0, count($macs), '?')) . ')');
+    $st->execute(array_values($macs));
+    return $st->rowCount();
+}
+
+/** Stav automaticke ulohy (import, zaloha) z tabulky macadmin_stav. */
+function state_get(string $key): array
+{
+    $st = db()->prepare('SELECT hodnota FROM macadmin_stav WHERE klic = ?');
+    $st->execute([$key]);
+    $v = $st->fetchColumn();
+    return $v === false ? [] : (json_decode((string)$v, true) ?: []);
+}
+
+function state_set(string $key, array $value): void
+{
+    db()->prepare('INSERT INTO macadmin_stav (klic, hodnota) VALUES (?, ?) ON DUPLICATE KEY UPDATE hodnota = VALUES(hodnota)')
+        ->execute([$key, json_encode($value, JSON_UNESCAPED_UNICODE)]);
+}
+
+/** Povolena zarizeni s udaji - pro export a zalohu. */
+function export_rows(): array
+{
+    $st = db()->prepare(
+        'SELECT r.username AS mac, i.jmeno, i.trida, i.poznamka FROM radcheck r
+         LEFT JOIN mac_info i ON i.mac = r.username WHERE r.attribute = ? ORDER BY i.trida, i.jmeno'
+    );
+    $st->execute([cfg('radcheck_attribute')]);
+    return $st->fetchAll();
+}
+
+/** Zapise CSV (format exportu, lze ho zase naimportovat) do otevreneho souboru. */
+function write_csv($out, array $rows): void
+{
+    fwrite($out, "\xEF\xBB\xBF"); // BOM pro Excel
+    fputcsv($out, ['mac', 'jmeno', 'trida', 'poznamka'], ';', '"', '\\');
+    foreach ($rows as $r) {
+        fputcsv($out, [$r['mac'], $r['jmeno'], $r['trida'], $r['poznamka']], ';', '"', '\\');
+    }
+}
+
+/** Nocni zaloha seznamu do $dir (mac-RRRR-MM-DD.csv), starsi nez $keepDays smaze. Vraci [soubor, pocet]. */
+function backup_devices(string $dir, int $keepDays = 30): array
+{
+    if (!is_dir($dir) && !mkdir($dir, 0750, true)) {
+        throw new RuntimeException("Nelze vytvorit adresar $dir");
+    }
+    $rows = export_rows();
+    $file = $dir . '/mac-' . date('Y-m-d') . '.csv';
+    $out = fopen($file, 'w');
+    if ($out === false) {
+        throw new RuntimeException("Nelze zapsat $file");
+    }
+    write_csv($out, $rows);
+    fclose($out);
+    foreach (glob($dir . '/mac-*.csv') ?: [] as $old) {
+        if (filemtime($old) < time() - $keepDays * 86400) {
+            unlink($old);
+        }
+    }
+    state_set('zaloha', ['cas' => date('Y-m-d H:i:s'), 'soubor' => $file, 'pocet' => count($rows)]);
+    return [$file, count($rows)];
 }
 
 /** Smaze stare zaznamy z radpostauth po davkach. Vraci pocet smazanych radku. */
@@ -271,7 +370,7 @@ function prune_postauth(int $days, int $batch = 20000): int
 }
 
 /**
- * Filtr seznamu zarizeni z parametru (GET nebo POST): q, t, l, r, n.
+ * Filtr seznamu zarizeni z parametru (GET nebo POST): q, t, l, r, n, m.
  * Vraci hodnoty filtru, podminky WHERE a jejich parametry; 'active' = je zadany aspon jeden filtr.
  */
 function device_filter(array $src): array
@@ -282,6 +381,7 @@ function device_filter(array $src): array
     $l = preg_match('/^[a-z]$/', $l) ? $l : ''; // pismeno tridy za rokem nastupu (2026.g)
     $rnd = !empty($src['r']);
     $nd = max(0, min((int)($src['n'] ?? 0), 3650)); // neprihlaseno alespon nd dni
+    $m = max(0, min((int)($src['m'] ?? 0), 50)); // aspon m zarizeni na jeden e-mail (poznamku)
     $where = ['r.attribute = ?'];
     $args = [cfg('radcheck_attribute')];
     if ($q !== '') {
@@ -313,9 +413,13 @@ function device_filter(array $src): array
                      AND p.reply = 'Access-Accept' AND p.authdate > NOW() - INTERVAL ? DAY)";
         $args[] = $nd;
     }
+    if ($m > 1) {
+        $where[] = "i.poznamka IN (SELECT poznamka FROM mac_info WHERE poznamka <> '' GROUP BY poznamka HAVING COUNT(*) >= ?)";
+        $args[] = $m;
+    }
     return [
-        'q' => $q, 't' => $t, 'l' => $l, 'r' => $rnd, 'n' => $nd, 'where' => $where, 'args' => $args,
-        'active' => $q !== '' || $t !== '' || $l !== '' || $rnd || $nd > 0,
+        'q' => $q, 't' => $t, 'l' => $l, 'r' => $rnd, 'n' => $nd, 'm' => $m, 'where' => $where, 'args' => $args,
+        'active' => $q !== '' || $t !== '' || $l !== '' || $rnd || $nd > 0 || $m > 1,
     ];
 }
 
@@ -494,8 +598,8 @@ function detect_columns(array $rows): array
             }
             if ($res['trida'] === null && preg_match('/tř[ií]d|trid|class/u', $hl)) {
                 $res['trida'] = $i;
-            } elseif ($res['email'] === null && str_contains($hl, 'mail')) {
-                $res['email'] = $i;
+            } elseif ($res['email'] === null && (str_contains($hl, 'mail') || preg_match('/^pozn[aá]mka$|^note$/u', $hl))) {
+                $res['email'] = $i; // e-mail z Forms, nebo sloupec poznamka z exportu
             } elseif (preg_match('/jm[eé]no|příjmen|prijmen/u', $hl)) {
                 $res['jmeno'] = $i; // otazka "Jmeno a prijmeni" ma prednost
             } elseif ($res['jmeno'] === null && preg_match('/^(name|název)$/u', $hl)) {
@@ -667,6 +771,7 @@ function page_header(string $title, string $active = ''): void
         'pridat'    => 'Přidat',
         'zamitnuta' => 'Zamítnutá',
         'import'    => 'Import / export',
+        'smazana'   => 'Smazaná',
         'udrzba'    => 'Údržba',
         'napoveda'  => 'Nápověda',
     ];

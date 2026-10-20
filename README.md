@@ -188,6 +188,8 @@ Denní údržba – soubor `/etc/cron.d/macadmin`:
 15 2 * * * apache php /var/www/macadmin/udrzba.php >> /var/log/macadmin-udrzba.log 2>&1
 ```
 
+Skript zároveň uloží zálohu seznamu povolených zařízení do `/var/lib/macadmin/zalohy` (30 dní); adresář musí patřit uživateli apache: `install -d -o apache -g apache -m 750 /var/lib/macadmin` (dělá i `macadmin-update`).
+
 a vytvořit log: `touch /var/log/macadmin-udrzba.log && chown apache /var/log/macadmin-udrzba.log`
 
 ## 5. Přepnutí

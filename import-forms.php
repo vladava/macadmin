@@ -3,6 +3,7 @@
 //   */10 * * * * apache php /var/www/macadmin/import-forms.php >> /var/log/macadmin-import.log 2>&1
 // Do logu pise jen pri zmene nebo chybe. Pri chybe posle e-mail na alert_email:
 // hned pri prvni chybe, pri trvajici chybe nejvys jednou za ALERT_REPEAT, a jednou po obnoveni.
+// Stav (posledni uspech, trvajici chyba) se uklada do tabulky macadmin_stav a ukazuje v Udrzbe.
 //   php import-forms.php --test-mail   # vyzkouseni odesilani e-mailu
 declare(strict_types=1);
 if (PHP_SAPI !== 'cli') {
@@ -12,28 +13,10 @@ if (PHP_SAPI !== 'cli') {
 require __DIR__ . '/lib.php';
 
 const ALERT_REPEAT = 6 * 3600;
-const STATE_DIR = '/var/lib/macadmin';
 
 function now(): string
 {
     return date('Y-m-d H:i:s');
-}
-
-function state_file(): string
-{
-    $dir = is_dir(STATE_DIR) && is_writable(STATE_DIR) ? STATE_DIR : sys_get_temp_dir();
-    return $dir . '/import-stav.json';
-}
-
-function load_state(): array
-{
-    $raw = @file_get_contents(state_file());
-    return $raw === false ? [] : (json_decode($raw, true) ?: []);
-}
-
-function save_state(array $st): void
-{
-    $st ? file_put_contents(state_file(), json_encode($st)) : @unlink(state_file());
 }
 
 if (in_array('--test-mail', $argv, true)) {
@@ -51,12 +34,19 @@ if ($url === '') {
     fwrite(STDERR, "forms_url neni v config.php nastaveno\n");
     exit(1);
 }
-$st = load_state();
+// stav v tabulce macadmin_stav (zobrazuje se v Udrzbe): since/count/mailed/error pri chybe, last_ok/added/filled
+try {
+    $st = state_get('import');
+} catch (Throwable $e) {
+    $st = []; // databaze nebezi - import stejne selze a upozorneni se posle
+}
+$st['last_run'] = now();
 try {
     $s = import_forms_url($url);
 } catch (Throwable $e) {
     $msg = $e->getMessage();
     echo now() . ' chyba: ' . $msg . "\n";
+    $st['error'] = $msg;
     $st['since'] ??= now();
     $st['count'] = ($st['count'] ?? 0) + 1;
     if (!isset($st['mailed']) || time() - $st['mailed'] >= ALERT_REPEAT) {
@@ -71,7 +61,10 @@ try {
             echo now() . " upozorneni odeslano na " . cfg('alert_email') . "\n";
         }
     }
-    save_state($st);
+    try {
+        state_set('import', $st);
+    } catch (Throwable $e) {
+    }
     exit(1);
 }
 if (isset($st['mailed'])) {
@@ -79,9 +72,8 @@ if (isset($st['mailed'])) {
         "Import registrací z OneDrive zase funguje (nefungoval od $st[since], neúspěšných pokusů: " . ($st['count'] ?? 0) . ').');
     echo now() . " import znovu funguje\n";
 }
-if ($st) {
-    save_state([]);
-}
+unset($st['error'], $st['since'], $st['count'], $st['mailed']);
+state_set('import', array_merge($st, ['last_ok' => now(), 'added' => $s['added'], 'filled' => $s['filled']]));
 if ($s['added'] || $s['filled']) {
     echo now() . " import: pridano $s[added], doplneno $s[filled]"
         . ($s['new'] ? ': ' . implode(', ', $s['new']) : '') . "\n";
