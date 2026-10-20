@@ -38,6 +38,12 @@ function normalize_mac(string $s): ?string
     return implode(':', str_split($hex, 2));
 }
 
+/** Rok nastupu a pismeno tridy ze skolniho e-mailu zaka (2026.g.prijmeni@stu.gfp.cz -> 2026.g), jinak ''. */
+function trida_z_emailu(string $email): string
+{
+    return preg_match('/^(\d{4})\.([a-z])\./i', trim($email), $m) ? $m[1] . '.' . strtolower($m[2]) : '';
+}
+
 /** Nahodna (soukroma) MAC: druhy znak 2, 6, A nebo E. */
 function is_random_mac(string $mac): bool
 {
@@ -475,6 +481,9 @@ function import_rows(array $rows): array
         $jmeno = $c['jmeno'] !== null ? mb_substr($r[$c['jmeno']] ?? '', 0, 100) : '';
         $trida = $c['trida'] !== null ? mb_substr($r[$c['trida']] ?? '', 0, 20) : '';
         $pozn  = $c['email'] !== null ? mb_substr($r[$c['email']] ?? '', 0, 255) : '';
+        if ($trida === '') {
+            $trida = trida_z_emailu($pozn); // Forms tridu nema, je v e-mailu zaka
+        }
         $badInRow = [];
         foreach ($c['macs'] as $col) {
             $rawMac = $r[$col] ?? '';

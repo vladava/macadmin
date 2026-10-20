@@ -7,6 +7,7 @@ Náhrada za daloRADIUS. Jednoduchá PHP 8 aplikace (bez frameworku) nad databáz
 - FreeRADIUS čte povolené MAC z tabulky `radcheck` (username = MAC ve tvaru `AA:BB:CC:DD:EE:FF`, `Auth-Type := Accept`).
 - Historie přihlášení je v `radpostauth` (FreeRADIUS ji zapisuje sám), na starém serveru měla 19 mil. řádků → promazávání po 90 dnech.
 - Jméno, třída a poznámka k MAC jsou ve vlastní tabulce `mac_info` (FreeRADIUS ji nečte).
+- Třída = rok nástupu + písmeno (`2026.g`), import ji bere ze školního e-mailu žáka (`2026.g.prijmeni@stu.gfp.cz`); seznam jde filtrovat i podle písmene.
 - Žáci registrují MAC přes MS Forms; správce nahrává celý export z Forms (.xlsx) – import přidá jen nové MAC a nic nepřepisuje.
 - Cílový server: AlmaLinux 9, FreeRADIUS 3.0.27, Apache + PHP 8, SELinux zapnutý. Starý server: CentOS 7, FreeRADIUS 3.0.13 (k vypnutí).
 - Jediný uživatel rozhraní je správce (jeden účet v `config.php`, heslo jako hash).

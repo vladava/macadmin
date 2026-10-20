@@ -53,11 +53,13 @@ try {
                 redirect('?p=udrzba');
             }
             redirect('?p=zarizeni&' . http_build_query([
-                'q' => $_POST['q'] ?? '', 't' => $_POST['t'] ?? '', 'r' => $_POST['r'] ?? '', 'n' => $_POST['n'] ?? '',
+                'q' => $_POST['q'] ?? '', 't' => $_POST['t'] ?? '', 'l' => $_POST['l'] ?? '', 'r' => $_POST['r'] ?? '', 'n' => $_POST['n'] ?? '',
             ]));
         }
         $q = trim((string)($_GET['q'] ?? ''));
         $t = trim((string)($_GET['t'] ?? ''));
+        $l = (string)($_GET['l'] ?? '');
+        $l = preg_match('/^[a-z]$/', $l) ? $l : ''; // pismeno tridy za rokem nastupu (2026.g)
         $rnd = !empty($_GET['r']);
         $nd = max(0, min((int)($_GET['n'] ?? 0), 3650)); // neprihlaseno alespon nd dni
         $s = max(1, (int)($_GET['s'] ?? 1));
@@ -79,6 +81,10 @@ try {
         if ($t !== '') {
             $where[] = 'i.trida = ?';
             $args[] = $t;
+        }
+        if ($l !== '') {
+            $where[] = "i.trida LIKE ?";
+            $args[] = '____.' . $l;
         }
         if ($rnd) {
             // stejne pravidlo jako is_random_mac(): druhy hexa znak 2, 6, A nebo E
@@ -106,7 +112,9 @@ try {
         $st->execute([cfg('radcheck_attribute')]);
         $total = (int)$st->fetchColumn();
         $since = db()->query('SELECT MIN(authdate) FROM radpostauth')->fetchColumn();
-        $keep = ['p' => 'zarizeni', 'q' => $q, 't' => $t, 'r' => $rnd ? '1' : '', 'n' => $nd ?: ''];
+        $keep = ['p' => 'zarizeni', 'q' => $q, 't' => $t, 'l' => $l, 'r' => $rnd ? '1' : '', 'n' => $nd ?: ''];
+        $pismena = db()->query("SELECT LOWER(RIGHT(trida, 1)) AS l, COUNT(*) AS n FROM mac_info
+                                WHERE trida LIKE '____._' GROUP BY 1 ORDER BY 1")->fetchAll();
 
         page_header('Zařízení', 'zarizeni');
         echo '<form class="row" method="get"><input type="hidden" name="p" value="zarizeni">'
@@ -115,6 +123,11 @@ try {
         foreach ($tridy as $tr) {
             echo '<option' . ($tr['trida'] === $t ? ' selected' : '') . ' value="' . h($tr['trida']) . '">'
                 . h($tr['trida']) . ' (' . (int)$tr['n'] . ')</option>';
+        }
+        echo '</select></label><label>Písmeno třídy<select name="l"><option value="">všechna</option>';
+        foreach ($pismena as $pm) {
+            echo '<option' . ($pm['l'] === $l ? ' selected' : '') . ' value="' . h($pm['l']) . '">'
+                . h($pm['l']) . ' (' . (int)$pm['n'] . ')</option>';
         }
         echo '</select></label>'
             . '<label>Nepřihlášeno aspoň (dní)<input name="n" type="number" min="1" max="3650" value="' . ($nd ?: '') . '" size="5"></label>'
@@ -135,7 +148,7 @@ try {
         }
         echo '</p>';
         echo '<form method="post" onsubmit="return confirm(\'Opravdu smazat vybraná zařízení?\')">' . csrf_field()
-            . '<input type="hidden" name="q" value="' . h($q) . '"><input type="hidden" name="t" value="' . h($t) . '">'
+            . '<input type="hidden" name="q" value="' . h($q) . '"><input type="hidden" name="t" value="' . h($t) . '"><input type="hidden" name="l" value="' . h($l) . '">'
             . '<input type="hidden" name="r" value="' . ($rnd ? '1' : '') . '"><input type="hidden" name="n" value="' . ($nd ?: '') . '">'
             . '<div class="scroll"><table><tr><th><input type="checkbox" onclick="for(const c of document.querySelectorAll(\'.sel\'))c.checked=this.checked"></th>'
             . '<th>MAC</th><th>Jméno</th><th>Třída</th><th>Poznámka</th><th>Přidáno</th><th>Naposledy</th><th></th></tr>';
