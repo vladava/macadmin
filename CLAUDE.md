@@ -15,7 +15,8 @@ Náhrada za daloRADIUS. Jednoduchá PHP 8 aplikace (bez frameworku) nad databáz
 - `index.php` – všechny stránky (`?p=zarizeni|pridat|zamitnuta|import|udrzba|login|logout`)
 - `lib.php` – DB, přihlášení, CSRF, normalizace MAC, čtení XLSX (ZipArchive + SimpleXML, bez knihoven), import, vzhled
 - `udrzba.php` – CLI skript pro cron (promazání `radpostauth`)
-- `setup.sql` – tabulka `mac_info`, indexy, DB uživatel `macadmin`
+- `import-forms.php` – CLI skript pro cron (import Excelu z Forms z OneDrive podle `forms_url`)
+- `setup.sql` – tabulky `mac_info` a `mac_smazane` (smazané MAC, import je znovu nepřidá), indexy, DB uživatel `macadmin`
 - `macadmin.conf` – Apache (přístup jen z 192.168.0.0/24)
 - `README.md` – postup přesunu RADIUS ze starého serveru a instalace
 

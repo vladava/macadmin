@@ -268,33 +268,44 @@ try {
             }
             exit;
         }
-        if ($post && isset($_POST['import'])) {
-            $rows = [];
-            $tmp = $_FILES['soubor']['tmp_name'] ?? '';
-            $paste = trim((string)($_POST['vlozit'] ?? ''));
+        if ($post && (isset($_POST['import']) || isset($_POST['import_url']))) {
             try {
-                if ($tmp !== '' && is_uploaded_file($tmp)) {
-                    $isXlsx = str_ends_with(strtolower($_FILES['soubor']['name']), '.xlsx')
-                        || file_get_contents($tmp, false, null, 0, 2) === 'PK';
-                    $rows = $isXlsx ? read_xlsx($tmp) : parse_text_table(file_get_contents($tmp));
-                } elseif ($paste !== '') {
-                    $rows = parse_text_table($paste);
+                if (isset($_POST['import_url'])) {
+                    $s = import_forms_url((string)cfg('forms_url'));
+                } else {
+                    $rows = [];
+                    $tmp = $_FILES['soubor']['tmp_name'] ?? '';
+                    $paste = trim((string)($_POST['vlozit'] ?? ''));
+                    if ($tmp !== '' && is_uploaded_file($tmp)) {
+                        $isXlsx = str_ends_with(strtolower($_FILES['soubor']['name']), '.xlsx')
+                            || file_get_contents($tmp, false, null, 0, 2) === 'PK';
+                        $rows = $isXlsx ? read_xlsx($tmp) : parse_text_table(file_get_contents($tmp));
+                    } elseif ($paste !== '') {
+                        $rows = parse_text_table($paste);
+                    }
+                    if (!$rows) {
+                        flash('Nahrajte soubor nebo vložte data.', 'err');
+                        redirect('?p=import');
+                    }
+                    $s = import_rows($rows);
                 }
-                if (!$rows) {
-                    flash('Nahrajte soubor nebo vložte data.', 'err');
-                    redirect('?p=import');
-                }
-                $s = import_rows($rows);
                 $c = $s['cols'];
-                $nm = fn($i) => $i === null ? '–' : ($c['header'] ? '„' . ($c['names'][$i] ?? '') . '“' : 'sloupec ' . ($i + 1));
+                $nm = fn($i) => $i === null ? '–' : ($c['header'] ? '„' . mb_strimwidth($c['names'][$i] ?? '', 0, 40, '…') . '“' : 'sloupec ' . ($i + 1));
                 flash("Import: nových $s[added], u existujících doplněno $s[filled], beze změny $s[skipped].");
-                flash('Použité sloupce – MAC: ' . $nm($c['mac']) . ', jméno: ' . $nm($c['jmeno'])
-                    . ', třída: ' . $nm($c['trida']) . ', poznámka (e-mail): ' . $nm($c['email']));
+                if ($s['new']) {
+                    flash('Přidáno: ' . implode(', ', array_slice($s['new'], 0, 60)) . (count($s['new']) > 60 ? ' …' : ''));
+                }
+                flash('Použité sloupce – MAC: ' . implode(', ', array_map($nm, $c['macs'])) . '; jméno: ' . $nm($c['jmeno'])
+                    . '; třída: ' . $nm($c['trida']) . '; poznámka (e-mail): ' . $nm($c['email']));
+                if ($s['ignored']) {
+                    flash('Přeskočeno – dříve smazaná zařízení (' . count($s['ignored']) . '): ' . implode(', ', array_slice($s['ignored'], 0, 40))
+                        . (count($s['ignored']) > 40 ? ' …' : '') . '. Znovu je povolíte ručně přes Přidat.');
+                }
                 if ($s['bad']) {
                     flash('Neplatná MAC (řádek: hodnota): ' . implode(' | ', array_slice($s['bad'], 0, 40)), 'err');
                 }
                 if ($s['random']) {
-                    flash('Náhodné (soukromé) adresy – žák by měl soukromou adresu pro GFP vypnout: '
+                    flash('Nově přidané náhodné (soukromé) adresy – žák by měl soukromou adresu pro GFP vypnout: '
                         . implode(', ', array_slice($s['random'], 0, 40)), 'err');
                 }
             } catch (RuntimeException $e) {
@@ -315,12 +326,18 @@ try {
             . '<p class="mut">Nahrajte celý soubor Excelu z MS Forms (.xlsx) nebo CSV, případně vložte sloupce zkopírované z Excelu. '
             . 'Sloupec s MAC adresou se najde sám, jméno, třída a e-mail podle záhlaví. '
             . '<strong>Přidají se jen nové MAC adresy</strong>, u existujících se nic nepřepíše, jen se doplní prázdné jméno nebo třída. '
-            . 'Klidně tedy nahrávejte pokaždé celý soubor.</p>'
+            . 'Zařízení, která jste smazali, se znovu nepřidají. Klidně tedy nahrávejte pokaždé celý soubor.</p>'
             . '<form method="post" enctype="multipart/form-data">' . csrf_field()
             . '<div class="row"><label>Soubor (.xlsx, .csv)<input type="file" name="soubor" accept=".xlsx,.csv,text/csv"></label></div>'
             . '<div class="row"><label style="flex:1">nebo vložte z Excelu (i se záhlavím)'
             . '<textarea name="vlozit" rows="6" style="width:100%" placeholder="MAC adresa&#9;Jméno a příjmení&#9;Třída"></textarea></label></div>'
             . '<button name="import" value="1">Importovat</button></form></div>';
+        if ((string)cfg('forms_url') !== '') {
+            echo '<div class="card"><h2>Import z OneDrive</h2>'
+                . '<p class="mut">Načte aktuální Excel s odpověďmi z MS Forms podle odkazu v <code>config.php</code>. '
+                . 'Automaticky to dělá i <code>import-forms.php</code> z cronu.</p>'
+                . '<form method="post">' . csrf_field() . '<button name="import_url" value="1">Načíst z OneDrive</button></form></div>';
+        }
         echo '<div class="card"><h2>Export</h2><form method="post">' . csrf_field()
             . '<button name="export" value="1" class="sec">Stáhnout CSV</button></form></div>';
         echo '<div class="card"><h2>Smazat celou třídu</h2><p class="mut">Např. po maturitě.</p>'

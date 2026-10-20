@@ -28,10 +28,10 @@ function db(): PDO
     return $pdo;
 }
 
-/** Prevede libovolny zapis MAC na AA:BB:CC:DD:EE:FF, nebo vrati null. */
+/** Prevede libovolny zapis MAC na AA:BB:CC:DD:EE:FF, nebo vrati null. Pismeno O bere jako nulu (casty preklep). */
 function normalize_mac(string $s): ?string
 {
-    $hex = strtoupper(preg_replace('/[^0-9A-Fa-f]/', '', $s));
+    $hex = strtoupper(preg_replace('/[^0-9A-Fa-f]/', '', str_ireplace('O', '0', $s)));
     if (strlen($hex) !== 12) {
         return null;
     }
@@ -214,6 +214,7 @@ function save_device(string $mac, string $jmeno, string $trida, string $poznamka
             'INSERT INTO mac_info (mac, jmeno, trida, poznamka) VALUES (?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE jmeno = VALUES(jmeno), trida = VALUES(trida), poznamka = VALUES(poznamka)'
         )->execute([$mac, $jmeno, $trida, $poznamka]);
+        $pdo->prepare('DELETE FROM mac_smazane WHERE mac = ?')->execute([$mac]);
         $pdo->commit();
         return $result;
     } catch (Throwable $e) {
@@ -222,6 +223,7 @@ function save_device(string $mac, string $jmeno, string $trida, string $poznamka
     }
 }
 
+/** Smaze zarizeni a zapamatuje si je, aby je import ze souboru Forms znovu nepridal. */
 function delete_devices(array $macs): int
 {
     if (!$macs) {
@@ -235,6 +237,12 @@ function delete_devices(array $macs): int
         $st->execute($macs);
         $n = $st->rowCount();
         $pdo->prepare("DELETE FROM mac_info WHERE mac IN ($in)")->execute($macs);
+        $mark = $pdo->prepare('INSERT INTO mac_smazane (mac) VALUES (?) ON DUPLICATE KEY UPDATE smazano = CURRENT_TIMESTAMP');
+        foreach ($macs as $m) {
+            if (($norm = normalize_mac((string)$m)) !== null) {
+                $mark->execute([$norm]);
+            }
+        }
         $pdo->commit();
         return $n;
     } catch (Throwable $e) {
@@ -258,7 +266,10 @@ function prune_postauth(int $days, int $batch = 20000): int
 
 /* ---------- Import (Excel z MS Forms, CSV, vlozeny text) ---------- */
 
-/** Precte prvni list souboru XLSX jako pole radku (bez knihoven, jen ZipArchive). */
+/**
+ * Precte list s daty ze souboru XLSX jako pole radku (bez knihoven, jen ZipArchive).
+ * Bere list s odpovedmi Forms (definedName ...ResponseSheet), jinak prvni viditelny neprazdny list.
+ */
 function read_xlsx(string $path): array
 {
     if (!class_exists('ZipArchive')) {
@@ -280,29 +291,57 @@ function read_xlsx(string $path): array
             $shared[] = $t;
         }
     }
-    // prvni list podle workbook.xml.rels (Forms ho jmenuje ruzne)
-    $sheetPath = 'xl/worksheets/sheet1.xml';
+    // listy v poradi sesitu; cesty podle workbook.xml.rels
+    $sheets = [];
     $wb = $zip->getFromName('xl/workbook.xml');
     $rels = $zip->getFromName('xl/_rels/workbook.xml.rels');
     if ($wb !== false && $rels !== false) {
+        $targets = [];
+        foreach (simplexml_load_string($rels)->Relationship as $rel) {
+            $target = ltrim((string)$rel['Target'], '/');
+            $targets[(string)$rel['Id']] = str_starts_with($target, 'xl/') ? $target : 'xl/' . $target;
+        }
         $wbx = simplexml_load_string($wb);
         $wbx->registerXPathNamespace('m', 'http://schemas.openxmlformats.org/spreadsheetml/2006/main');
-        $first = $wbx->xpath('//m:sheets/m:sheet')[0] ?? null;
-        if ($first !== null) {
-            $rid = (string)$first->attributes('http://schemas.openxmlformats.org/officeDocument/2006/relationships')['id'];
-            foreach (simplexml_load_string($rels)->Relationship as $rel) {
-                if ((string)$rel['Id'] === $rid) {
-                    $target = ltrim((string)$rel['Target'], '/');
-                    $sheetPath = str_starts_with($target, 'xl/') ? $target : 'xl/' . $target;
-                }
+        $response = null;
+        foreach ($wbx->xpath('//m:definedNames/m:definedName') ?: [] as $dn) {
+            if (str_ends_with((string)$dn['name'], 'ResponseSheet')) {
+                $response = trim((string)$dn, '"\'');
+            }
+        }
+        foreach ($wbx->xpath('//m:sheets/m:sheet') ?: [] as $sh) {
+            $rid = (string)$sh->attributes('http://schemas.openxmlformats.org/officeDocument/2006/relationships')['id'];
+            if (!isset($targets[$rid])) {
+                continue;
+            }
+            $entry = ['path' => $targets[$rid], 'hidden' => (string)$sh['state'] !== '' && (string)$sh['state'] !== 'visible'];
+            if ($response !== null && (string)$sh['name'] === $response) {
+                array_unshift($sheets, $entry);
+            } else {
+                $sheets[] = $entry;
             }
         }
     }
-    $xml = $zip->getFromName($sheetPath);
-    $zip->close();
-    if ($xml === false) {
-        throw new RuntimeException('V souboru XLSX chybí list s daty.');
+    if (!$sheets) {
+        $sheets[] = ['path' => 'xl/worksheets/sheet1.xml', 'hidden' => false];
     }
+    $rows = [];
+    foreach ($sheets as $sheet) {
+        if ($sheet['hidden'] || ($xml = $zip->getFromName($sheet['path'])) === false) {
+            continue;
+        }
+        $rows = xlsx_sheet_rows($xml, $shared);
+        if ($rows) {
+            break;
+        }
+    }
+    $zip->close();
+    return $rows;
+}
+
+/** Radky jednoho listu XLSX. */
+function xlsx_sheet_rows(string $xml, array $shared): array
+{
     $rows = [];
     foreach (simplexml_load_string($xml)->sheetData->row as $row) {
         $cells = [];
@@ -354,17 +393,18 @@ function parse_text_table(string $raw): array
 }
 
 /**
- * Najde sloupce: MAC podle obsahu, ostatni podle hlavicky.
- * Vraci ['mac'=>i, 'jmeno'=>i|null, 'trida'=>i|null, 'email'=>i|null, 'header'=>bool, 'names'=>[...]]
+ * Najde sloupce: MAC podle obsahu (i vic sloupcu - Forms ma prvni a druhe zarizeni), ostatni podle hlavicky.
+ * Vraci ['macs'=>[i,...], 'jmeno'=>i|null, 'trida'=>i|null, 'email'=>i|null, 'header'=>bool, 'names'=>[...]]
  */
 function detect_columns(array $rows): array
 {
     $width = max(array_map('count', $rows ?: [[]]));
+    $macs = [];
     $best = null;
     $bestScore = 0;
     for ($i = 0; $i < $width; $i++) {
         $n = $ok = 0;
-        foreach (array_slice($rows, 0, 300) as $r) {
+        foreach (array_slice($rows, 0, 500) as $r) {
             if (($r[$i] ?? '') === '') {
                 continue;
             }
@@ -374,6 +414,9 @@ function detect_columns(array $rows): array
             }
         }
         $score = $n ? $ok / $n : 0;
+        if ($ok > 0 && $score >= 0.5) {
+            $macs[] = $i;
+        }
         if ($ok > 0 && $score > $bestScore) {
             $best = $i;
             $bestScore = $score;
@@ -382,12 +425,16 @@ function detect_columns(array $rows): array
     if ($best === null) {
         throw new RuntimeException('V datech jsem nenašel žádný sloupec s MAC adresami.');
     }
-    $header = normalize_mac($rows[0][$best] ?? '') === null;
-    $res = ['mac' => $best, 'jmeno' => null, 'trida' => null, 'email' => null, 'header' => $header, 'names' => $rows[0]];
+    if (!$macs) {
+        $macs = [$best];
+    }
+    $first = $macs[0];
+    $header = normalize_mac($rows[0][$first] ?? '') === null;
+    $res = ['macs' => $macs, 'jmeno' => null, 'trida' => null, 'email' => null, 'header' => $header, 'names' => $rows[0]];
     if ($header) {
         foreach ($rows[0] as $i => $h) {
             $hl = mb_strtolower($h);
-            if ($i === $best) {
+            if (in_array($i, $macs, true)) {
                 continue;
             }
             if ($res['trida'] === null && preg_match('/tř[ií]d|trid|class/u', $hl)) {
@@ -402,64 +449,138 @@ function detect_columns(array $rows): array
         }
     } else {
         // bez hlavicky: format mac;jmeno;trida;poznamka
-        $res['jmeno'] = $best + 1 < $width ? $best + 1 : null;
-        $res['trida'] = $best + 2 < $width ? $best + 2 : null;
-        $res['email'] = $best + 3 < $width ? $best + 3 : null;
+        $res['macs'] = [$first];
+        $res['jmeno'] = $first + 1 < $width ? $first + 1 : null;
+        $res['trida'] = $first + 2 < $width ? $first + 2 : null;
+        $res['email'] = $first + 3 < $width ? $first + 3 : null;
     }
     return $res;
 }
 
 /**
  * Import bez prepisovani: nove MAC prida, u existujicich jen doplni prazdne udaje.
- * Vraci statistiku.
+ * Drive smazana zarizeni (mac_smazane) znovu nepridava. Vraci statistiku.
  */
 function import_rows(array $rows): array
 {
     $c = detect_columns($rows);
-    $stat = ['added' => 0, 'filled' => 0, 'skipped' => 0, 'bad' => [], 'random' => [], 'cols' => $c];
+    $stat = ['added' => 0, 'filled' => 0, 'skipped' => 0, 'new' => [], 'ignored' => [], 'bad' => [], 'random' => [], 'cols' => $c];
     $pdo = db();
+    $deleted = $pdo->prepare('SELECT 1 FROM mac_smazane WHERE mac = ?');
     $seen = [];
     foreach ($rows as $idx => $r) {
         if ($idx === 0 && $c['header']) {
             continue;
         }
-        $rawMac = $r[$c['mac']] ?? '';
-        if ($rawMac === '') {
-            continue;
-        }
-        $mac = normalize_mac($rawMac);
-        if ($mac === null) {
-            $stat['bad'][] = ($idx + 1) . ': ' . mb_substr($rawMac, 0, 40);
-            continue;
-        }
-        if (isset($seen[$mac])) {
-            continue; // stejna MAC vicekrat v souboru
-        }
-        $seen[$mac] = true;
         $jmeno = $c['jmeno'] !== null ? mb_substr($r[$c['jmeno']] ?? '', 0, 100) : '';
         $trida = $c['trida'] !== null ? mb_substr($r[$c['trida']] ?? '', 0, 20) : '';
         $pozn  = $c['email'] !== null ? mb_substr($r[$c['email']] ?? '', 0, 255) : '';
-        if (is_random_mac($mac)) {
-            $stat['random'][] = $mac . ($jmeno !== '' ? " ($jmeno)" : '');
+        $badInRow = [];
+        foreach ($c['macs'] as $col) {
+            $rawMac = $r[$col] ?? '';
+            if ($rawMac === '') {
+                continue;
+            }
+            $mac = normalize_mac($rawMac);
+            if ($mac === null) {
+                // stejny preklep i v pomocnem sloupci (napr. Dalor) hlasit jen jednou
+                $key = strtoupper(preg_replace('/[^0-9A-Za-z]/', '', $rawMac));
+                if (!isset($badInRow[$key])) {
+                    $badInRow[$key] = true;
+                    $stat['bad'][] = ($idx + 1) . ': ' . mb_substr($rawMac, 0, 40);
+                }
+                continue;
+            }
+            if (isset($seen[$mac])) {
+                continue; // stejna MAC vicekrat v souboru
+            }
+            $seen[$mac] = true;
+            $label = $mac . ($jmeno !== '' ? " ($jmeno)" : '');
+            if (!mac_exists($mac)) {
+                $deleted->execute([$mac]);
+                if ($deleted->fetchColumn()) {
+                    $stat['ignored'][] = $label;
+                    continue;
+                }
+                save_device($mac, $jmeno, $trida, $pozn);
+                $stat['added']++;
+                $stat['new'][] = $label;
+                if (is_random_mac($mac)) {
+                    $stat['random'][] = $label;
+                }
+                continue;
+            }
+            // existujici: doplnit jen prazdna pole
+            $pdo->prepare("INSERT IGNORE INTO mac_info (mac) VALUES (?)")->execute([$mac]);
+            $st = $pdo->prepare(
+                "UPDATE mac_info SET
+                   jmeno = IF(jmeno = '', ?, jmeno),
+                   trida = IF(trida = '', ?, trida),
+                   poznamka = IF(poznamka = '', ?, poznamka)
+                 WHERE mac = ?"
+            );
+            $st->execute([$jmeno, $trida, $pozn, $mac]);
+            $st->rowCount() > 0 ? $stat['filled']++ : $stat['skipped']++;
         }
-        if (!mac_exists($mac)) {
-            save_device($mac, $jmeno, $trida, $pozn);
-            $stat['added']++;
-            continue;
-        }
-        // existujici: doplnit jen prazdna pole
-        $pdo->prepare("INSERT IGNORE INTO mac_info (mac) VALUES (?)")->execute([$mac]);
-        $st = $pdo->prepare(
-            "UPDATE mac_info SET
-               jmeno = IF(jmeno = '', ?, jmeno),
-               trida = IF(trida = '', ?, trida),
-               poznamka = IF(poznamka = '', ?, poznamka)
-             WHERE mac = ?"
-        );
-        $st->execute([$jmeno, $trida, $pozn, $mac]);
-        $st->rowCount() > 0 ? $stat['filled']++ : $stat['skipped']++;
     }
     return $stat;
+}
+
+/** Stahne XLSX ze sdileneho odkazu OneDrive / SharePoint ("Kdokoli s odkazem") do docasneho souboru. */
+function download_xlsx(string $url): string
+{
+    if (!function_exists('curl_init')) {
+        throw new RuntimeException('Chybí PHP rozšíření curl.');
+    }
+    if (parse_url($url, PHP_URL_SCHEME) !== 'https') {
+        throw new RuntimeException('Odkaz na soubor musí začínat https://');
+    }
+    $host = strtolower((string)parse_url($url, PHP_URL_HOST));
+    if (str_ends_with($host, 'sharepoint.com') && !preg_match('/[?&]download=1/', $url)) {
+        $url .= (str_contains($url, '?') ? '&' : '?') . 'download=1';
+    } elseif ($host === '1drv.ms' || str_ends_with($host, 'onedrive.live.com')) {
+        // osobni OneDrive: sdileny odkaz pres API shares
+        $url = 'https://api.onedrive.com/v1.0/shares/u!' . rtrim(strtr(base64_encode($url), '+/', '-_'), '=') . '/root/content';
+    }
+    $tmp = tempnam(sys_get_temp_dir(), 'macadmin');
+    $fh = fopen($tmp, 'wb');
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_FILE           => $fh,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS      => 10,
+        CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
+        CURLOPT_COOKIEFILE     => '', // SharePoint posila cookie mezi presmerovanimi
+        CURLOPT_CONNECTTIMEOUT => 15,
+        CURLOPT_TIMEOUT        => 120,
+        CURLOPT_FAILONERROR    => true,
+        CURLOPT_MAXFILESIZE    => 50 * 1024 * 1024,
+        CURLOPT_USERAGENT      => 'macadmin',
+    ]);
+    $ok = curl_exec($ch);
+    $err = curl_error($ch);
+    curl_close($ch);
+    fclose($fh);
+    if (!$ok) {
+        unlink($tmp);
+        throw new RuntimeException('Stažení souboru z OneDrive selhalo: ' . $err);
+    }
+    if (file_get_contents($tmp, false, null, 0, 2) !== 'PK') {
+        unlink($tmp);
+        throw new RuntimeException('Odkaz nevrací soubor Excel – zkontrolujte, že je soubor sdílený pro „Kdokoli s odkazem“.');
+    }
+    return $tmp;
+}
+
+/** Stahne Excel z odkazu forms_url a naimportuje ho. */
+function import_forms_url(string $url): array
+{
+    $tmp = download_xlsx($url);
+    try {
+        return import_rows(read_xlsx($tmp));
+    } finally {
+        unlink($tmp);
+    }
 }
 
 /* ---------- Vzhled ---------- */

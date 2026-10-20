@@ -125,7 +125,7 @@ Očekávaný výsledek: `Received Access-Accept`. Pro neznámou MAC: `Access-Rej
 
 ```
 mkdir -p /var/www/macadmin
-cp index.php lib.php config.sample.php udrzba.php /var/www/macadmin/
+cp index.php lib.php config.sample.php udrzba.php import-forms.php /var/www/macadmin/
 cp /var/www/macadmin/config.sample.php /var/www/macadmin/config.php
 cp macadmin.conf /etc/httpd/conf.d/
 ```
@@ -157,7 +157,21 @@ systemctl enable --now php-fpm httpd
 
 Rozhraní: `https://IP-NOVEHO-SERVERU/macadmin/` (přístup jen z 192.168.0.0/24, viz `macadmin.conf`; HTTP se přesměruje na HTTPS).
 
-Registrace z MS Forms: v rozhraní **Import / export** nahrajte pokaždé celý stažený Excel z Forms. Sloupce MAC, jméno, třída a e-mail se najdou podle záhlaví, přidají se jen nové adresy a vypíšou se neplatné a náhodné MAC.
+Registrace z MS Forms: v rozhraní **Import / export** nahrajte pokaždé celý stažený Excel z Forms. Sloupce s MAC (i první a druhé zařízení) se najdou podle obsahu, jméno, třída a e-mail podle záhlaví. Přidají se jen nové adresy, dříve smazaná zařízení se znovu nepřidají (povolíte je ručně přes Přidat) a vypíšou se neplatné a náhodné MAC.
+
+Import přímo z OneDrive: Excel s odpověďmi sdílejte jako „Kdokoli s odkazem“ (stačí zobrazení), odkaz vložte do `forms_url` v `config.php`. V rozhraní pak přibude tlačítko **Načíst z OneDrive**; pro něj musí webový server smět ven na internet:
+
+```
+setsebool -P httpd_can_network_connect 1
+```
+
+Automatický import každých 10 minut – soubor `/etc/cron.d/macadmin-import`:
+
+```
+*/10 * * * * apache php /var/www/macadmin/import-forms.php >> /var/log/macadmin-import.log 2>&1
+```
+
+a vytvořit log: `touch /var/log/macadmin-import.log && chown apache /var/log/macadmin-import.log`. Do logu se píše jen při přidání zařízení nebo chybě.
 
 Denní údržba – soubor `/etc/cron.d/macadmin`:
 

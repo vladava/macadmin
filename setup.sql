@@ -12,6 +12,12 @@ CREATE TABLE IF NOT EXISTS mac_info (
   KEY trida (trida)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Smazana zarizeni - import ze souboru Forms je znovu neprida (rucni pridani zaznam zrusi)
+CREATE TABLE IF NOT EXISTS mac_smazane (
+  mac        VARCHAR(17)  NOT NULL PRIMARY KEY,
+  smazano    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- Index pro rychle hledani podle data (zamitnuta zarizeni, promazavani)
 -- (IF NOT EXISTS: skript jde spustit opakovane)
 ALTER TABLE radpostauth ADD INDEX IF NOT EXISTS authdate (authdate);
@@ -23,5 +29,6 @@ ALTER TABLE radpostauth ADD INDEX IF NOT EXISTS user_reply_date (username, reply
 CREATE USER IF NOT EXISTS 'macadmin'@'localhost' IDENTIFIED BY 'ZMENTE_HESLO';
 GRANT SELECT, INSERT, UPDATE, DELETE ON radius.radcheck    TO 'macadmin'@'localhost';
 GRANT SELECT, INSERT, UPDATE, DELETE ON radius.mac_info    TO 'macadmin'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE ON radius.mac_smazane TO 'macadmin'@'localhost';
 GRANT SELECT, DELETE                 ON radius.radpostauth TO 'macadmin'@'localhost';
 FLUSH PRIVILEGES;

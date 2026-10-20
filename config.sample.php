@@ -19,6 +19,10 @@ return [
     'radcheck_op'        => ':=',
     'radcheck_value'     => 'Accept',
 
+    // Sdileny odkaz na Excel s odpovedmi z MS Forms na OneDrive / SharePoint
+    // (sdileni "Kdokoli s odkazem"). Prazdne = import jen nahranim souboru.
+    'forms_url' => '',
+
     // Kolik dni historie prihlaseni (radpostauth) uchovavat
     'postauth_keep_days' => 90,
 
