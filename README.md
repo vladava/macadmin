@@ -173,6 +173,15 @@ Automatický import každých 10 minut – soubor `/etc/cron.d/macadmin-import`:
 
 a vytvořit log: `touch /var/log/macadmin-import.log && chown apache /var/log/macadmin-import.log`. Do logu se píše jen při přidání zařízení nebo chybě.
 
+Upozornění e-mailem, když automatický import selže: do `config.php` doplnit `'alert_email' => 'vais@gfp.cz',`. E-mail přijde hned při první chybě, při trvající chybě nejvýš jednou za 6 hodin a jednou po obnovení. Posílá se přes místní postfix:
+
+```
+dnf install -y postfix && systemctl enable --now postfix
+sudo -u apache php /var/www/macadmin/import-forms.php --test-mail
+```
+
+Když zkušební e-mail nedorazí (ani do spamu), podívejte se do `journalctl -u postfix` – školní pošta může zprávy přímo ze serveru odmítat, pak je potřeba v postfixu nastavit `relayhost`.
+
 Denní údržba – soubor `/etc/cron.d/macadmin`:
 
 ```

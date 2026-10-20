@@ -592,6 +592,23 @@ function import_forms_url(string $url): array
     }
 }
 
+/** Posle upozorneni e-mailem na alert_email (pres mistni MTA). Vraci true, kdyz ho MTA prijal. */
+function send_alert(string $subject, string $body): bool
+{
+    $to = trim((string)cfg('alert_email'));
+    if ($to === '') {
+        return false;
+    }
+    $host = gethostname() ?: 'localhost';
+    $headers = [
+        'From'                      => 'macadmin <macadmin@' . $host . '>',
+        'MIME-Version'              => '1.0',
+        'Content-Type'              => 'text/plain; charset=UTF-8',
+        'Content-Transfer-Encoding' => '8bit',
+    ];
+    return mail($to, mb_encode_mimeheader($subject, 'UTF-8'), $body . "\n\n-- \nmacadmin na serveru $host\n", $headers);
+}
+
 /* ---------- Vzhled ---------- */
 
 function page_header(string $title, string $active = ''): void

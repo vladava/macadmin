@@ -23,6 +23,10 @@ return [
     // (sdileni "Kdokoli s odkazem"). Prazdne = import jen nahranim souboru.
     'forms_url' => '',
 
+    // Kam poslat e-mail, kdyz automaticky import z OneDrive selze (prazdne = neposilat).
+    // Posila se pres mistni postfix (PHP mail()); vyzkouset: php import-forms.php --test-mail
+    'alert_email' => '',
+
     // Kolik dni historie prihlaseni (radpostauth) uchovavat
     'postauth_keep_days' => 90,
 

@@ -123,6 +123,7 @@ if [[ -n "$FORMS" && ! -f /etc/cron.d/macadmin-import ]]; then
     echo '*/10 * * * * apache php /var/www/macadmin/import-forms.php >> /var/log/macadmin-import.log 2>&1' > /etc/cron.d/macadmin-import
     echo "Cron: pridan import z OneDrive kazdych 10 minut"
 fi
+install -d -o apache -g apache -m 750 /var/lib/macadmin   # stav importu (upozorneni e-mailem)
 for log in /var/log/macadmin-udrzba.log /var/log/macadmin-import.log; do
     [[ -f "$log" ]] || touch "$log"
     chown apache "$log"
