@@ -662,6 +662,7 @@ try {
 <a href="#nahodne">Náhodné adresy</a> ·
 <a href="#import">Import</a> ·
 <a href="#udrzba">Údržba</a> ·
+<a href="#powerautomate">Power Automate</a> ·
 <a href="#problemy">Když něco nefunguje</a> ·
 <a href="#certifikat">Certifikát a heslo v Chrome</a> ·
 <a href="#server">Server</a></p>
@@ -735,20 +736,58 @@ Zbytečné adresy uklidíte filtrem <em>Nepřihlášeno aspoň … dní</em> (p�
 Přidají se jen nové adresy, u existujících se doplní jen prázdné údaje, nic se nepřepisuje. Písmeno O v adrese se bere jako nula.</li>
 <li><strong>Import z OneDrive</strong> (odkaz je {$forms}) – Excel s odpověďmi sdílený jako „Kdokoli s odkazem“, odkaz je v <code>config.php</code> (<code>forms_url</code>).
 Server ho načítá sám každých 10 minut; tlačítkem <em>Načíst z OneDrive</em> hned.</li>
-<li><strong>Proč Power Automate</strong> – Excel propojený s Forms (z tlačítka „Otevřít v Excelu“) dostane nové odpovědi až ve chvíli, kdy ho někdo otevře; macadmin ho jen stahuje, takže by nové registrace neviděl.
-Proto odpovědi zapisuje tok v Power Automate do obyčejného Excelu a <code>forms_url</code> ukazuje na něj:
-<ol>
-<li>V OneDrive nový Excel, v 1. řádku <code>Čas | E-mail | Jméno | MAC 1 | MAC 2</code>, označit a <em>Vložit → Tabulka</em> (s hlavičkou).</li>
-<li>Power Automate → <em>Automatizovaný tok cloudu</em>: <em>Forms – Při odeslání nové odpovědi</em> → <em>Forms – Získat podrobnosti odpovědi</em> →
-<em>Office 365 Users – Získat profil uživatele (V2)</em> (uživatel = e-mail respondenta) → <em>Excel Online (Business) – Přidat řádek do tabulky</em>
-(Čas = datum odeslání, E-mail = e-mail respondenta, Jméno = zobrazované jméno, MAC 1 a MAC 2 = odpovědi s MAC).</li>
-<li>Excel sdílet „Kdokoli s odkazem – může zobrazit“ a odkaz dát do <code>forms_url</code>. Zkušební odpověď se má do 10 minut objevit v historii importů na Údržbě.</li>
-</ol>
-Sloupce, které mají v záhlaví čas nebo datum, import nikdy nebere jako MAC.</li>
+<li><strong>Odkud se registrace berou</strong> – odpovědi z Forms zapisuje tok v Power Automate do Excelu <code>wifi-registrace-tok.xlsx</code> a macadmin si ho stahuje. Podrobně v oddílu <a href="#powerautomate">Power Automate</a>.</li>
 <li><strong>Upozornění e-mailem</strong> na {$alert} – když automatický import selže (OneDrive nedostupný, zrušené sdílení…): hned při první chybě, pak nejvýš jednou za 6 hodin a jednou po obnovení.</li>
 <li><strong>Výsledek importu</strong>: <em>Přidáno</em> – nové adresy; <em>Přeskočeno</em> – dříve smazaná zařízení; <em>Neplatná MAC</em> – odpovědi, které nejsou adresa (překlepy, IP adresa, text) – nic se z nich nepřidá; <em>Nově přidané náhodné</em> – viz <a href="#nahodne">náhodné adresy</a>.</li>
 <li><strong>CSV nebo vložený text</strong> – sloupce se záhlavím, nebo bez záhlaví v pořadí MAC; jméno; třída; poznámka.</li>
 </ul>
+</div>
+
+<div class="card help" id="powerautomate">
+<h2>Power Automate (Forms → Excel)</h2>
+<p><strong>Proč:</strong> Excel propojený s Forms (z tlačítka „Otevřít v Excelu“) dostane nové odpovědi až ve chvíli, kdy ho někdo otevře.
+macadmin soubor jen stahuje, takže by nové registrace neviděl. Proto každou odpověď hned zapíše tok v Power Automate do obyčejného Excelu.</p>
+<p><strong>Jak to běží:</strong> žák odešle formulář → Forms do pár sekund spustí tok (automaticky, nic se neotevírá, počítač může být vypnutý)
+→ řádek v Excelu → macadmin ho do 10 minut načte. Žákům tedy platí „aktivace do 10 minut“.</p>
+
+<h3>Nastavení toku</h3>
+<table>
+<tr><th>Tok</th><td><em>MAC adresy z Form do souboru pro MAC Admin</em> (make.powerautomate.com → Moje toky), vlastník <code>vais@gfp.cz</code></td></tr>
+<tr><th>1. Spouštěč</th><td><em>Microsoft Forms – Když se odešle nová odpověď</em> → formulář <em>WiFi GFP Neratovice – registrace zařízení</em></td></tr>
+<tr><th>2.</th><td><em>Microsoft Forms – Získat podrobnosti o odpovědi</em> → stejný formulář, ID odpovědi = <em>ID odpovědi</em> ze spouštěče</td></tr>
+<tr><th>3.</th><td><em>Office 365 Users – Získat profil uživatele (V2)</em> → Uživatel (UPN) = <em>Responders' Email</em></td></tr>
+<tr><th>4.</th><td><em>Excel Online (Business) – Přidá řádek do tabulky</em> → OneDrive for Business, soubor <code>wifi-registrace-tok.xlsx</code> (kořen OneDrive), <em>Tabulka1</em>:
+Čas = <em>Submission time</em>, E-mail = <em>Responders' Email</em>, Jméno = <em>Zobrazované jméno</em> (z kroku 3),
+MAC 1 = otázka „…nového zařízení…“, MAC 2 = otázka „…druhého zařízení…“</td></tr>
+<tr><th>Excel</th><td>tabulka se záhlavím <code>Čas | E-mail | Jméno | MAC 1 | MAC 2</code>, sdílený „Kdokoli s odkazem – může zobrazit“; odkaz je v <code>forms_url</code> v <code>config.php</code></td></tr>
+</table>
+
+<h3>Co ho může rozbít</h3>
+<ul>
+<li><strong>Změna hesla nebo vypršelé přihlášení</strong> účtu <code>vais@gfp.cz</code> → tok selže; v Power Automate u toku <em>Opravit připojení</em> (znovu se přihlásit).</li>
+<li><strong>Přejmenovaný nebo přesunutý Excel</strong>, přejmenovaná záhlaví sloupců nebo tabulka → tok selže nebo zapíše prázdné hodnoty. Soubor, záhlaví ani tabulku neměnit.</li>
+<li><strong>Otázka s MAC smazaná a vytvořená znovu</strong> ve formuláři → tok ji nenajde a MAC zůstane prázdná; v kroku 4 ji znovu namapovat. Úprava textu otázky nevadí.</li>
+<li><strong>90 dní bez spuštění</strong> (např. prázdniny bez registrací) → Microsoft může tok vypnout (předem pošle e-mail); stačí ho znovu <em>Zapnout</em>. <strong>Na začátku školního roku zkontrolovat, že tok není vypnutý.</strong></li>
+<li><strong>Zrušené sdílení Excelu</strong> → macadmin soubor nestáhne; přijde e-mail z macadminu a na <a href="#udrzba">Údržbě</a> je červená chyba.</li>
+</ul>
+
+<h3>Jak se o chybě dozvím</h3>
+<ul>
+<li>Selže tok → Power Automate pošle e-mail vlastníkovi toku.</li>
+<li>Selže stažení Excelu → e-mail z macadminu a chyba v kartě <em>Automatické úlohy</em> na Údržbě.</li>
+<li>Vypnutý tok sám nic nehlásí – je to vidět jen v Power Automate (stav „Vypnuto“).</li>
+<li>Doporučení: v Power Automate přidat k toku spoluvlastníka (Sdílet), aby ho mohl opravit i někdo jiný.</li>
+</ul>
+
+<h3>Test a hledání chyb</h3>
+<ol>
+<li>Odeslat zkušební odpověď s vymyšlenou MAC (např. <code>AA:BB:CC:00:00:01</code>) a Excel neotevírat.</li>
+<li>V Power Automate → tok → <em>Historie spuštění</em>: poslední běh má mít zelené fajfky u všech kroků. Kliknutím na krok
+<em>Přidá řádek do tabulky</em> se ukážou vstupy (soubor, tabulka, zapsané hodnoty).</li>
+<li>Do 10 minut se zařízení objeví na Údržbě v <em>Importy, které přidaly zařízení</em> se zdrojem „OneDrive – automaticky“.</li>
+<li>Zkušební zařízení smazat – díky paměti smazaných se z Excelu znovu nepřidá.</li>
+</ol>
+<p>Excel na webu někdy ukáže nový řádek až po chvíli nebo po novém otevření souboru; rozhoduje historie spuštění toku a import v macadminu.</p>
 </div>
 
 <div class="card help" id="udrzba">
