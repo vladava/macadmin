@@ -597,6 +597,15 @@ function detect_columns(array $rows): array
     if ($best === null) {
         throw new RuntimeException('V datech jsem nenašel žádný sloupec s MAC adresami.');
     }
+    // sloupce s casem/datem v zahlavi nikdy nejsou MAC (napr. "21.10.2026 10:59" ma po odstraneni oddelovacu 12 cislic)
+    $isTime = fn($i) => preg_match('/čas|\bcas\b|datum|date|time|odesl|^id$/iu', (string)($rows[0][$i] ?? '')) === 1;
+    $macs = array_values(array_filter($macs, fn($i) => !$isTime($i)));
+    if ($best !== null && $isTime($best)) {
+        $best = $macs[0] ?? null;
+    }
+    if ($best === null) {
+        throw new RuntimeException('V datech jsem nenašel žádný sloupec s MAC adresami.');
+    }
     if (!$macs) {
         $macs = [$best];
     }

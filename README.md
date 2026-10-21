@@ -159,6 +159,8 @@ Rozhraní: `https://IP-NOVEHO-SERVERU/macadmin/` (přístup jen z 192.168.0.0/24
 
 Registrace z MS Forms: v rozhraní **Import / export** nahrajte pokaždé celý stažený Excel z Forms. Sloupce s MAC (i první a druhé zařízení) se najdou podle obsahu, jméno, třída a e-mail podle záhlaví. Přidají se jen nové adresy, dříve smazaná zařízení se znovu nepřidají (povolíte je ručně přes Přidat) a vypíšou se neplatné a náhodné MAC.
 
+Pozor: Excel propojený s Forms (tlačítko „Otevřít v Excelu“) dostává nové odpovědi až ve chvíli, kdy ho někdo otevře – stažením přes odkaz se nesynchronizuje. Pro automatický import proto odpovědi zapisuje tok v Power Automate (Forms – při odeslání nové odpovědi → Forms – získat podrobnosti odpovědi → Office 365 Users – získat profil uživatele → Excel Online (Business) – přidat řádek do tabulky) do obyčejného Excelu se záhlavím `Čas | E-mail | Jméno | MAC 1 | MAC 2`; podrobně v aplikaci v Nápovědě. Sloupce s časem/datem v záhlaví import jako MAC nebere.
+
 Import přímo z OneDrive: Excel s odpověďmi sdílejte jako „Kdokoli s odkazem“ (stačí zobrazení), odkaz vložte do `forms_url` v `config.php`. V rozhraní pak přibude tlačítko **Načíst z OneDrive**; pro něj musí webový server smět ven na internet:
 
 ```

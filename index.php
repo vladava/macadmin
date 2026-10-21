@@ -735,6 +735,16 @@ Zbytečné adresy uklidíte filtrem <em>Nepřihlášeno aspoň … dní</em> (p�
 Přidají se jen nové adresy, u existujících se doplní jen prázdné údaje, nic se nepřepisuje. Písmeno O v adrese se bere jako nula.</li>
 <li><strong>Import z OneDrive</strong> (odkaz je {$forms}) – Excel s odpověďmi sdílený jako „Kdokoli s odkazem“, odkaz je v <code>config.php</code> (<code>forms_url</code>).
 Server ho načítá sám každých 10 minut; tlačítkem <em>Načíst z OneDrive</em> hned.</li>
+<li><strong>Proč Power Automate</strong> – Excel propojený s Forms (z tlačítka „Otevřít v Excelu“) dostane nové odpovědi až ve chvíli, kdy ho někdo otevře; macadmin ho jen stahuje, takže by nové registrace neviděl.
+Proto odpovědi zapisuje tok v Power Automate do obyčejného Excelu a <code>forms_url</code> ukazuje na něj:
+<ol>
+<li>V OneDrive nový Excel, v 1. řádku <code>Čas | E-mail | Jméno | MAC 1 | MAC 2</code>, označit a <em>Vložit → Tabulka</em> (s hlavičkou).</li>
+<li>Power Automate → <em>Automatizovaný tok cloudu</em>: <em>Forms – Při odeslání nové odpovědi</em> → <em>Forms – Získat podrobnosti odpovědi</em> →
+<em>Office 365 Users – Získat profil uživatele (V2)</em> (uživatel = e-mail respondenta) → <em>Excel Online (Business) – Přidat řádek do tabulky</em>
+(Čas = datum odeslání, E-mail = e-mail respondenta, Jméno = zobrazované jméno, MAC 1 a MAC 2 = odpovědi s MAC).</li>
+<li>Excel sdílet „Kdokoli s odkazem – může zobrazit“ a odkaz dát do <code>forms_url</code>. Zkušební odpověď se má do 10 minut objevit v historii importů na Údržbě.</li>
+</ol>
+Sloupce, které mají v záhlaví čas nebo datum, import nikdy nebere jako MAC.</li>
 <li><strong>Upozornění e-mailem</strong> na {$alert} – když automatický import selže (OneDrive nedostupný, zrušené sdílení…): hned při první chybě, pak nejvýš jednou za 6 hodin a jednou po obnovení.</li>
 <li><strong>Výsledek importu</strong>: <em>Přidáno</em> – nové adresy; <em>Přeskočeno</em> – dříve smazaná zařízení; <em>Neplatná MAC</em> – odpovědi, které nejsou adresa (překlepy, IP adresa, text) – nic se z nich nepřidá; <em>Nově přidané náhodné</em> – viz <a href="#nahodne">náhodné adresy</a>.</li>
 <li><strong>CSV nebo vložený text</strong> – sloupce se záhlavím, nebo bez záhlaví v pořadí MAC; jméno; třída; poznámka.</li>
