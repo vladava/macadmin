@@ -316,6 +316,15 @@ function state_set(string $key, array $value): void
         ->execute([$key, json_encode($value, JSON_UNESCAPED_UNICODE)]);
 }
 
+/** Zapise do historie import, ktery pridal aspon jedno zarizeni. */
+function log_import(string $zdroj, array $s): void
+{
+    if ($s['added'] > 0) {
+        db()->prepare('INSERT INTO import_historie (zdroj, pridano, doplneno, zarizeni) VALUES (?, ?, ?, ?)')
+            ->execute([$zdroj, $s['added'], $s['filled'], implode("\n", $s['new'])]);
+    }
+}
+
 /** Povolena zarizeni s udaji - pro export a zalohu. */
 function export_rows(): array
 {
@@ -835,6 +844,7 @@ button.link{background:none;border:0;color:var(--acc);padding:0}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:0 0 16px}
 .tag{display:inline-block;font-size:12px;padding:1px 6px;border-radius:4px;background:var(--warn)}.mut{color:var(--mut)}
 .scroll{overflow-x:auto}
+th a.sort{color:inherit;text-decoration:none}th a.sort:hover{color:var(--acc)}
 footer{max-width:1100px;margin:8px auto 24px;padding:0 16px;color:var(--mut);font-size:12px}
 details.help-login{max-width:820px;font-size:14px}details.help-login summary{cursor:pointer;color:var(--acc)}
 details.help-login pre{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:8px;overflow-x:auto;font-size:12px}

@@ -32,6 +32,17 @@ CREATE TABLE IF NOT EXISTS macadmin_stav (
   zmeneno    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Historie importu, ktere pridaly zarizeni (Udrzba); starsi nez rok maze udrzba.php
+CREATE TABLE IF NOT EXISTS import_historie (
+  id         INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  cas        TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  zdroj      VARCHAR(60)  NOT NULL,
+  pridano    INT          NOT NULL,
+  doplneno   INT          NOT NULL,
+  zarizeni   TEXT         NOT NULL,
+  KEY cas (cas)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- Index pro rychle hledani podle data (zamitnuta zarizeni, promazavani)
 -- (IF NOT EXISTS: skript jde spustit opakovane)
 ALTER TABLE radpostauth ADD INDEX IF NOT EXISTS authdate (authdate);
@@ -45,5 +56,6 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON radius.radcheck    TO 'macadmin'@'localh
 GRANT SELECT, INSERT, UPDATE, DELETE ON radius.mac_info    TO 'macadmin'@'localhost';
 GRANT SELECT, INSERT, UPDATE, DELETE ON radius.mac_smazane TO 'macadmin'@'localhost';
 GRANT SELECT, INSERT, UPDATE, DELETE ON radius.macadmin_stav TO 'macadmin'@'localhost';
+GRANT SELECT, INSERT, DELETE ON radius.import_historie TO 'macadmin'@'localhost';
 GRANT SELECT, DELETE                 ON radius.radpostauth TO 'macadmin'@'localhost';
 FLUSH PRIVILEGES;

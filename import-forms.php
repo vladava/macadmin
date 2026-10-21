@@ -74,6 +74,7 @@ if (isset($st['mailed'])) {
 }
 unset($st['error'], $st['since'], $st['count'], $st['mailed']);
 state_set('import', array_merge($st, ['last_ok' => now(), 'added' => $s['added'], 'filled' => $s['filled']]));
+log_import('OneDrive – automaticky', $s);
 if ($s['added'] || $s['filled']) {
     echo now() . " import: pridano $s[added], doplneno $s[filled]"
         . ($s['new'] ? ': ' . implode(', ', $s['new']) : '') . "\n";

@@ -15,6 +15,8 @@ $days = (int)cfg('postauth_keep_days');
 $n = prune_postauth($days);
 echo date('Y-m-d H:i:s') . " radpostauth: smazano $n zaznamu starsich nez $days dni\n";
 
+db()->exec('DELETE FROM import_historie WHERE cas < NOW() - INTERVAL 1 YEAR');
+
 try {
     [$file, $count] = backup_devices(BACKUP_DIR);
     echo date('Y-m-d H:i:s') . " zaloha: $count zarizeni do $file\n";

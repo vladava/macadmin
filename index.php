@@ -79,12 +79,20 @@ try {
             }
             redirect('?p=zarizeni&' . http_build_query([
                 'q' => $_POST['q'] ?? '', 't' => $_POST['t'] ?? '', 'l' => $_POST['l'] ?? '', 'r' => $_POST['r'] ?? '', 'n' => $_POST['n'] ?? '', 'm' => $_POST['m'] ?? '',
+                'o' => $_POST['o'] ?? '', 'd' => $_POST['d'] ?? '',
             ]));
         }
         $f = device_filter($_GET);
         ['q' => $q, 't' => $t, 'l' => $l, 'r' => $rnd, 'n' => $nd, 'm' => $m, 'where' => $where, 'args' => $args] = $f;
         $s = max(1, (int)($_GET['s'] ?? 1));
         $perPage = 500;
+        // trideni podle sloupce: o = klic sloupce, d = asc|desc
+        $sorts = ['mac' => 'r.username', 'jmeno' => 'i.jmeno', 'trida' => 'i.trida', 'poznamka' => 'i.poznamka',
+                  'pridano' => 'i.vytvoreno', 'naposledy' => 'naposledy'];
+        $o = (string)($_GET['o'] ?? '');
+        $o = isset($sorts[$o]) ? $o : '';
+        $d = ($_GET['d'] ?? '') === 'desc' ? 'desc' : 'asc';
+        $order = $o === '' ? 'i.trida, i.jmeno, r.username' : $sorts[$o] . ' ' . strtoupper($d) . ', r.username';
         $from = 'FROM radcheck r LEFT JOIN mac_info i ON i.mac = r.username WHERE ' . implode(' AND ', $where);
         $st = db()->prepare("SELECT COUNT(*) $from");
         $st->execute($args);
@@ -94,7 +102,7 @@ try {
         $st = db()->prepare("SELECT r.username AS mac, i.jmeno, i.trida, i.poznamka, i.vytvoreno,
                   (SELECT MAX(p.authdate) FROM radpostauth p WHERE p.username = r.username AND p.reply = 'Access-Accept') AS naposledy
                 $from
-                ORDER BY i.trida, i.jmeno, r.username LIMIT $perPage OFFSET " . (($s - 1) * $perPage));
+                ORDER BY $order LIMIT $perPage OFFSET " . (($s - 1) * $perPage));
         $st->execute($args);
         $rows = $st->fetchAll();
         $tridy = db()->query("SELECT trida, COUNT(*) n FROM mac_info WHERE trida <> '' GROUP BY trida ORDER BY trida")->fetchAll();
@@ -103,11 +111,18 @@ try {
         $total = (int)$st->fetchColumn();
         $since = db()->query('SELECT MIN(authdate) FROM radpostauth')->fetchColumn();
         $keep = ['p' => 'zarizeni', 'q' => $q, 't' => $t, 'l' => $l, 'r' => $rnd ? '1' : '', 'n' => $nd ?: '', 'm' => $m ?: ''];
+        $sortKeep = $o !== '' ? ['o' => $o, 'd' => $d] : [];
+        $th = function (string $key, string $label) use ($keep, $o, $d): string {
+            $next = $o === $key && $d === 'asc' ? 'desc' : 'asc';
+            return '<th><a class="sort" href="' . h('?' . http_build_query($keep + ['o' => $key, 'd' => $next])) . '">' . $label
+                . ($o === $key ? ($d === 'asc' ? ' ▲' : ' ▼') : '') . '</a></th>';
+        };
         $pismena = db()->query("SELECT LOWER(RIGHT(trida, 1)) AS l, COUNT(*) AS n FROM mac_info
                                 WHERE trida LIKE '____._' GROUP BY 1 ORDER BY 1")->fetchAll();
 
         page_header('Zařízení', 'zarizeni');
         echo '<form class="row" method="get"><input type="hidden" name="p" value="zarizeni">'
+            . ($o !== '' ? '<input type="hidden" name="o" value="' . h($o) . '"><input type="hidden" name="d" value="' . h($d) . '">' : '')
             . '<label>Hledat (MAC, jméno, poznámka)<input name="q" value="' . h($q) . '" size="30"></label>'
             . '<label>Třída<select name="t"><option value="">všechny</option>';
         foreach ($tridy as $tr) {
@@ -131,7 +146,7 @@ try {
         }
         echo '<p class="mut">Nalezeno ' . $found . ' z ' . $total . ' povolených zařízení.';
         if ($pages > 1) {
-            $link = fn($n) => '?' . http_build_query($keep + ['s' => $n]);
+            $link = fn($n) => '?' . http_build_query($keep + $sortKeep + ['s' => $n]);
             echo ' Stránka ' . $s . ' z ' . $pages . ':';
             for ($i = 1; $i <= $pages; $i++) {
                 echo ' ' . ($i === $s ? '<strong>' . $i . '</strong>' : '<a href="' . h($link($i)) . '">' . $i . '</a>');
@@ -141,8 +156,10 @@ try {
         echo '<form method="post">' . csrf_field()
             . '<input type="hidden" name="q" value="' . h($q) . '"><input type="hidden" name="t" value="' . h($t) . '"><input type="hidden" name="l" value="' . h($l) . '">'
             . '<input type="hidden" name="r" value="' . ($rnd ? '1' : '') . '"><input type="hidden" name="n" value="' . ($nd ?: '') . '"><input type="hidden" name="m" value="' . ($m ?: '') . '">'
+            . '<input type="hidden" name="o" value="' . h($o) . '"><input type="hidden" name="d" value="' . h($d) . '">'
             . '<div class="scroll"><table><tr><th><input type="checkbox" onclick="for(const c of document.querySelectorAll(\'.sel\'))c.checked=this.checked"></th>'
-            . '<th>MAC</th><th>Jméno</th><th>Třída</th><th>Poznámka</th><th>Přidáno</th><th>Naposledy</th><th></th></tr>';
+            . $th('mac', 'MAC') . $th('jmeno', 'Jméno') . $th('trida', 'Třída') . $th('poznamka', 'Poznámka')
+            . $th('pridano', 'Přidáno') . $th('naposledy', 'Naposledy') . '<th></th></tr>';
         foreach ($rows as $r) {
             echo '<tr><td><input type="checkbox" class="sel" name="mac[]" value="' . h($r['mac']) . '"></td>'
                 . '<td class="mono">' . h($r['mac']) . (is_random_mac($r['mac']) ? ' <span class="tag">náhodná</span>' : '') . '</td>'
@@ -290,11 +307,14 @@ try {
                     $s = import_forms_url((string)cfg('forms_url'));
                     state_set('import', array_merge(state_get('import'),
                         ['last_ok' => date('Y-m-d H:i:s'), 'added' => $s['added'], 'filled' => $s['filled']]));
+                    log_import('OneDrive – ručně', $s);
                 } else {
                     $rows = [];
                     $tmp = $_FILES['soubor']['tmp_name'] ?? '';
                     $paste = trim((string)($_POST['vlozit'] ?? ''));
+                    $zdroj = 'vložený text';
                     if ($tmp !== '' && is_uploaded_file($tmp)) {
+                        $zdroj = 'soubor ' . mb_strimwidth((string)$_FILES['soubor']['name'], 0, 40, '…');
                         $isXlsx = str_ends_with(strtolower($_FILES['soubor']['name']), '.xlsx')
                             || file_get_contents($tmp, false, null, 0, 2) === 'PK';
                         $rows = $isXlsx ? read_xlsx($tmp) : parse_text_table(file_get_contents($tmp));
@@ -306,6 +326,7 @@ try {
                         redirect('?p=import');
                     }
                     $s = import_rows($rows);
+                    log_import($zdroj, $s);
                 }
                 $c = $s['cols'];
                 $nm = fn($i) => $i === null ? '–' : ($c['header'] ? '„' . mb_strimwidth($c['names'][$i] ?? '', 0, 40, '…') . '“' : 'sloupec ' . ($i + 1));
@@ -473,6 +494,23 @@ try {
             ? h($zal['cas']) . ' – ' . (int)$zal['pocet'] . ' zařízení, <code>' . h($zal['soubor']) . '</code>'
             : 'zatím neproběhla';
         echo '<br><span class="mut">každou noc do <code>/var/lib/macadmin/zalohy</code> (30 dní); obnova: soubor stáhnout přes SFTP a nahrát v Import / export</span></td></tr></table></div>';
+        $hist = db()->query('SELECT cas, zdroj, pridano, doplneno, zarizeni FROM import_historie ORDER BY cas DESC, id DESC LIMIT 50')->fetchAll();
+        echo '<div class="card"><h2>Importy, které přidaly zařízení</h2>';
+        if (!$hist) {
+            echo '<p class="mut">Zatím žádný.</p>';
+        } else {
+            echo '<div class="scroll"><table><tr><th>Čas</th><th>Zdroj</th><th>Přidáno</th><th>Doplněno</th><th>Přidaná zařízení</th></tr>';
+            foreach ($hist as $hr) {
+                $items = array_filter(explode("\n", (string)$hr['zarizeni']));
+                $links = array_map(fn($x) => '<a href="?p=pridat&mac=' . urlencode(substr($x, 0, 17)) . '">' . h($x) . '</a>', $items);
+                echo '<tr><td class="mono">' . h(substr((string)$hr['cas'], 0, 16)) . '</td><td>' . h($hr['zdroj']) . '</td>'
+                    . '<td>' . (int)$hr['pridano'] . '</td><td>' . (int)$hr['doplneno'] . '</td>'
+                    . '<td>' . (count($links) <= 3 ? implode('<br>', $links)
+                        : '<details><summary>' . count($links) . ' zařízení</summary>' . implode('<br>', $links) . '</details>') . '</td></tr>';
+            }
+            echo '</table></div><p class="mut">Posledních 50 importů; starší než rok se mažou.</p>';
+        }
+        echo '</div>';
         echo '<div class="card"><h2>Promazání historie přihlášení</h2><p class="mut">Smaže záznamy z <code>radpostauth</code> starší než '
             . (int)cfg('postauth_keep_days') . ' dní. Automaticky to dělá i <code>udrzba.php</code> z cronu.</p>'
             . '<form method="post">' . csrf_field() . '<button name="prune" value="1" class="sec">Promazat nyní</button></form></div>';
@@ -539,6 +577,7 @@ Změna v seznamu platí hned pro další připojení – nic se nerestartuje.</p
 <div class="card help" id="zarizeni">
 <h2>Zařízení</h2>
 <ul>
+<li><strong>Třídění</strong> – kliknutím na záhlaví sloupce (MAC, Jméno, Třída, Poznámka, Přidáno, Naposledy), dalším kliknutím obráceně. Třídění podle <em>Naposledy</em> vzestupně dá nahoru zařízení, která se nepřipojila nejdéle (nebo vůbec).</li>
 <li><strong>Hledat</strong> – podle části MAC (v libovolném zápisu, např. <code>b7:32</code> nebo <code>0b9a05</code>), jména nebo poznámky (e-mailu).</li>
 <li><strong>Třída</strong> – rok nástupu a písmeno, např. <code>2026.g</code>. Import ji bere ze školního e-mailu žáka (<code>2026.g.prijmeni@stu.gfp.cz</code>). <strong>Písmeno třídy</strong> vybere všechny ročníky s daným písmenem.</li>
 <li><strong>Naposledy</strong> – poslední úspěšné připojení k wifi. Historie se uchovává {$keepDays} dní, „–“ znamená, že se zařízení za tu dobu nepřipojilo.</li>
@@ -600,6 +639,7 @@ Server ho načítá sám každých 10 minut; tlačítkem <em>Načíst z OneDrive
 <ul>
 <li><strong>Povoleno / Zamítnuto za 24 h</strong> – rychlá kontrola, že wifi ověřuje. Ve výuce „Povoleno“ roste se stovkami.</li>
 <li><strong>Automatické úlohy</strong> – kdy naposledy proběhl import z OneDrive a jestli teď nehlásí chybu, a kdy proběhla noční záloha.</li>
+<li><strong>Importy, které přidaly zařízení</strong> – každý import (automatický z OneDrive, ruční z OneDrive, nahraný soubor), který přidal aspoň jedno zařízení, se seznamem přidaných zařízení. Uchovává se rok.</li>
 <li><strong>Noční záloha</strong> – každou noc se seznam povolených zařízení uloží do <code>/var/lib/macadmin/zalohy/mac-RRRR-MM-DD.csv</code> (30 dní zpět).
 Obnova: soubor stáhnout přes SFTP a nahrát v <em>Import / export</em> (přidají se chybějící zařízení i s údaji; dříve smazaná se přeskočí).</li>
 <li><strong>Promazání historie</strong> – záznamy starší než {$keepDays} dní maže každou noc cron (<code>udrzba.php</code>), tlačítkem hned.</li>
