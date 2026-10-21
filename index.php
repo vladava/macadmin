@@ -388,7 +388,7 @@ try {
                 . (is_random_mac($r['mac']) ? ' <span class="tag">náhodná</span>' : '') . '</td>'
                 . '<td>' . (int)$r['pokusu'] . '</td><td>' . (int)$r['dni'] . '</td>'
                 . '<td class="mut">' . h(substr((string)$r['prvni'], 0, 16)) . '</td><td>' . h(substr((string)$r['naposledy'], 0, 16)) . '</td>'
-                . '<td>' . ($r['known'] ? 'už povoleno' : '') . '</td>'
+                . '<td>' . ($r['known'] ? '<a href="?p=pridat&mac=' . urlencode($r['norm']) . '" title="Údaje a historie připojení">už povoleno</a>' : '') . '</td>'
                 . '<td>' . ($r['known'] ? '' : '<a href="?p=pridat&zpet=zamitnuta&mac=' . urlencode($r['norm']) . '">povolit…</a>') . '</td></tr>';
         }
         echo '</table></div>';
@@ -704,6 +704,7 @@ Tabulku zařízení jde třídit klikem na záhlaví; <em>Dní</em> je počet r�
 <code>AA:BB:CC:DD:EE:FF</code>, ale FreeRADIUS hledá přesně to, co poslalo UDM – na velikosti písmen nezáleží, na oddělovačích ano
 (<code>d80b9a05b732</code> nebo <code>D8-0B-…</code> v databázi nenajde).</p>
 <ul>
+<li><strong>Kliknutím na „už povoleno“</strong> otevřete zařízení s historií posledních pokusů: když po přidání už přibývá jen „povoleno“, je vše v pořádku.</li>
 <li><strong>Pár takových řádků je normální</strong> – historie ukazuje i pokusy z doby, než jste zařízení povolili. Poslední pokus (sloupec <em>Naposledy</em>) je pak starší než chvíle povolení a nové už nepřibývají.</li>
 <li><strong>Hodně řádků „už povoleno“ s čerstvými časy</strong> a na Údržbě stojící „Povoleno za 24 h“ znamená, že UDM posílá MAC v jiném zápisu, než je v databázi – nepřipojí se nikdo. Podívejte se do sloupce MAC, v jakém zápisu adresy chodí, a v UDM dočasně vraťte původní RADIUS server.</li>
 </ul>
