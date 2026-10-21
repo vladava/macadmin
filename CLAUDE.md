@@ -4,7 +4,7 @@ Náhrada za daloRADIUS. Jednoduchá PHP 8 aplikace (bez frameworku) nad databáz
 
 ## Kontext
 - Wifi síť GFP (UniFi, UDM Pro Max) ověřuje žáky podle MAC adresy přes FreeRADIUS (RADIUS MAC auth, profil „Freeradius Linux“ v UDM).
-- FreeRADIUS čte povolené MAC z tabulky `radcheck` (username = MAC ve tvaru `AA:BB:CC:DD:EE:FF`, `Auth-Type := Accept`).
+- FreeRADIUS čte povolené MAC z tabulky `radcheck` (username = MAC ve tvaru `AA:BB:CC:DD:EE:FF`, `Auth-Type := Accept`). `setup.sql` přidává unikátní index `(username, attribute)`, aby v ní nevznikaly duplicity.
 - Historie přihlášení je v `radpostauth` (FreeRADIUS ji zapisuje sám), na starém serveru měla 19 mil. řádků → promazávání po 90 dnech.
 - Jméno, třída a poznámka k MAC jsou ve vlastní tabulce `mac_info` (FreeRADIUS ji nečte).
 - Třída = rok nástupu + písmeno (`2026.g`), import ji bere ze školního e-mailu žáka (`2026.g.prijmeni@stu.gfp.cz`); seznam jde filtrovat i podle písmene.

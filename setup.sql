@@ -43,6 +43,11 @@ CREATE TABLE IF NOT EXISTS import_historie (
   KEY cas (cas)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- radcheck: kazda MAC jen jednou (stary daloRADIUS nechaval duplicity); nejdriv smazat nadbytecne radky
+DELETE r1 FROM radcheck r1 JOIN radcheck r2
+  ON r1.username = r2.username AND r1.attribute = r2.attribute AND r1.id > r2.id;
+ALTER TABLE radcheck ADD UNIQUE INDEX IF NOT EXISTS user_attr (username, attribute);
+
 -- Index pro rychle hledani podle data (zamitnuta zarizeni, promazavani)
 -- (IF NOT EXISTS: skript jde spustit opakovane)
 ALTER TABLE radpostauth ADD INDEX IF NOT EXISTS authdate (authdate);
