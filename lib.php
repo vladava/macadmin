@@ -829,6 +829,7 @@ function css(): string
 @media (prefers-color-scheme:dark){:root{--bg:#14171c;--fg:#e6e8eb;--mut:#9aa3af;--card:#1c2027;--line:#2c323b;--acc:#6aa2ff;--ok:#16301f;--okf:#8fd9a8;--err:#3a1a1a;--errf:#f2a3a3;--warn:#3a3016}}
 *{box-sizing:border-box}body{margin:0;font:15px/1.45 system-ui,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--fg)}
 nav{display:flex;flex-wrap:wrap;gap:4px 16px;align-items:center;padding:10px 16px;background:var(--card);border-bottom:1px solid var(--line)}
+a{color:var(--acc)}.nowrap{white-space:nowrap}
 nav a{color:var(--fg);text-decoration:none;padding:4px 2px}nav a.on{color:var(--acc);border-bottom:2px solid var(--acc)}
 nav .right{margin-left:auto}main{max-width:1100px;margin:0 auto;padding:16px}
 h1{font-size:22px;margin:8px 0 16px}h2{font-size:17px;margin:24px 0 8px}
@@ -845,6 +846,14 @@ button.link{background:none;border:0;color:var(--acc);padding:0}
 .tag{display:inline-block;font-size:12px;padding:1px 6px;border-radius:4px;background:var(--warn)}.mut{color:var(--mut)}
 .scroll{overflow-x:auto}
 th a.sort{color:inherit;text-decoration:none}th a.sort:hover{color:var(--acc)}
+.tiles{display:flex;flex-wrap:wrap;gap:12px;margin:0 0 16px}.tile{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 14px;min-width:150px}
+.tile b{display:block;font-size:24px;font-weight:600}.tile span{color:var(--mut);font-size:13px}.tile.warn{background:var(--warn)}
+.bars{display:flex;align-items:flex-end;gap:2px;height:160px;padding-top:20px;border-bottom:1px solid var(--line)}
+.bar{flex:1;min-width:3px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;position:relative}
+.bar span{display:block;width:100%;max-width:32px;min-height:1px;background:var(--acc);border-radius:4px 4px 0 0}
+.bar b{font-size:12px;font-weight:600;margin-bottom:2px}.bar:hover span{opacity:.75}
+.bar:hover::after{content:attr(data-tip);position:absolute;bottom:100%;left:50%;transform:translateX(-50%);white-space:nowrap;background:var(--fg);color:var(--bg);font-size:12px;padding:3px 8px;border-radius:4px;z-index:1;pointer-events:none}
+.bars-axis{display:flex;gap:2px;margin:2px 0 8px}.bars-axis small{flex:1;min-width:3px;text-align:center;color:var(--mut);font-size:11px;white-space:nowrap;overflow:visible}
 footer{max-width:1100px;margin:8px auto 24px;padding:0 16px;color:var(--mut);font-size:12px}
 details.help-login{max-width:820px;font-size:14px}details.help-login summary{cursor:pointer;color:var(--acc)}
 details.help-login pre{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:8px;overflow-x:auto;font-size:12px}

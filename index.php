@@ -265,29 +265,131 @@ try {
     case 'zamitnuta':
         $days = (int)($_GET['d'] ?? cfg('rejected_days'));
         $days = max(1, min($days, 90));
+        $daysAsked = $days;
+        $onlyUnknown = !empty($_GET['u']);
+        $since = (new DateTimeImmutable('today'))->modify('-' . ($days - 1) . ' days'); // cele dny vcetne dneska
+        // graf nezacinat pred prvnim zaznamem historie (jinak by dny bez historie vypadaly jako "nic zamitnuto")
+        $firstLog = db()->query('SELECT DATE(MIN(authdate)) FROM radpostauth')->fetchColumn();
+        $shortHistory = false;
+        if ($firstLog && new DateTimeImmutable($firstLog) > $since) {
+            $since = new DateTimeImmutable($firstLog);
+            $days = (int)$since->diff(new DateTimeImmutable('today'))->days + 1;
+            $shortHistory = true;
+        }
+        // po dnech: zamitnuta a povolena zarizeni (pro srovnani)
         $st = db()->prepare(
-            "SELECT p.username AS mac, COUNT(*) AS pokusu, MIN(p.authdate) AS prvni, MAX(p.authdate) AS naposledy
-             FROM radpostauth p
-             WHERE p.reply = 'Access-Reject' AND p.authdate > NOW() - INTERVAL ? DAY
-             GROUP BY p.username ORDER BY naposledy DESC LIMIT 500"
+            "SELECT DATE(authdate) AS den, reply, COUNT(*) AS pokusu, COUNT(DISTINCT username) AS zarizeni
+             FROM radpostauth WHERE authdate >= ? AND reply IN ('Access-Accept', 'Access-Reject')
+             GROUP BY den, reply"
         );
-        $st->execute([$days]);
-        $rows = $st->fetchAll();
+        $st->execute([$since->format('Y-m-d')]);
+        $perDay = [];
+        for ($i = 0; $i < $days; $i++) {
+            $perDay[$since->modify("+$i days")->format('Y-m-d')] = ['rej' => 0, 'rejTry' => 0, 'acc' => 0];
+        }
+        foreach ($st as $r) {
+            if (isset($perDay[$r['den']])) {
+                if ($r['reply'] === 'Access-Reject') {
+                    $perDay[$r['den']]['rej'] = (int)$r['zarizeni'];
+                    $perDay[$r['den']]['rejTry'] = (int)$r['pokusu'];
+                } else {
+                    $perDay[$r['den']]['acc'] = (int)$r['zarizeni'];
+                }
+            }
+        }
+        // po zarizenich, trideni klikem na zahlavi
+        $sorts = ['mac' => 'mac', 'pokusu' => 'pokusu', 'dni' => 'dni', 'prvni' => 'prvni', 'naposledy' => 'naposledy'];
+        $o = (string)($_GET['o'] ?? '');
+        $o = isset($sorts[$o]) ? $o : 'naposledy';
+        $dir = ($_GET['dir'] ?? ($o === 'naposledy' && !isset($_GET['o']) ? 'desc' : 'asc')) === 'desc' ? 'desc' : 'asc';
+        $st = db()->prepare(
+            "SELECT username AS mac, COUNT(*) AS pokusu, COUNT(DISTINCT DATE(authdate)) AS dni,
+                    MIN(authdate) AS prvni, MAX(authdate) AS naposledy
+             FROM radpostauth WHERE reply = 'Access-Reject' AND authdate >= ?
+             GROUP BY username ORDER BY " . $sorts[$o] . ' ' . strtoupper($dir) . ', mac'
+        );
+        $st->execute([$since->format('Y-m-d')]);
+        $rows = [];
+        $knownCount = $tries = 0;
+        foreach ($st as $r) {
+            $r['norm'] = normalize_mac($r['mac']) ?? $r['mac'];
+            $r['known'] = mac_exists($r['norm']);
+            $knownCount += $r['known'] ? 1 : 0;
+            $tries += (int)$r['pokusu'];
+            if (!$onlyUnknown || !$r['known']) {
+                $rows[] = $r;
+            }
+        }
+        $devices = $knownCount + count(array_filter($rows, fn($r) => !$r['known']));
+
         page_header('Zamítnutá zařízení', 'zamitnuta');
         echo '<form class="row" method="get"><input type="hidden" name="p" value="zamitnuta">'
-            . '<label>Za posledních dní<input name="d" type="number" min="1" max="90" value="' . $days . '" size="4"></label><button>Zobrazit</button></form>';
-        echo '<p class="mut">Zařízení, která se zkoušela připojit k síti GFP a nejsou povolená. '
+            . '<label>Za posledních dní<input name="d" type="number" min="1" max="90" value="' . $daysAsked . '" size="4"></label>'
+            . '<label><span><input type="checkbox" name="u" value="1"' . ($onlyUnknown ? ' checked' : '') . '> jen nepovolená</span></label>'
+            . '<button>Zobrazit</button></form>';
+        echo '<p class="mut">Zařízení, která se zkoušela připojit k síti GFP a server je odmítl. '
             . 'Adresy označené „náhodná“ jsou soukromé adresy telefonů – žák musí pro síť GFP soukromou adresu vypnout, jinak se adresa časem změní. '
             . '<a href="?p=napoveda#zamitnuta">Co znamená stav „už povoleno“?</a></p>';
-        echo '<div class="scroll"><table><tr><th>MAC</th><th>Pokusů</th><th>První</th><th>Naposledy</th><th>Stav</th><th></th></tr>';
-        foreach ($rows as $r) {
-            $norm = normalize_mac($r['mac']) ?? $r['mac'];
-            $known = mac_exists($norm);
+
+        if ($shortHistory) {
+            echo '<p class="mut">Historie přihlášení je k dispozici teprve od ' . h($since->format('j. n. Y')) . ', statistika začíná tímto dnem.</p>';
+        }
+        // souhrn
+        $daysWith = count(array_filter($perDay, fn($x) => $x['rej'] > 0));
+        $avg = $daysWith ? round(array_sum(array_column($perDay, 'rej')) / $daysWith) : 0;
+        echo '<div class="tiles">'
+            . '<div class="tile"><b>' . $devices . '</b><span>zamítnutých zařízení</span></div>'
+            . '<div class="tile"><b>' . $tries . '</b><span>pokusů o připojení</span></div>'
+            . '<div class="tile"><b>' . $avg . '</b><span>zařízení průměrně za den</span></div>'
+            . '<div class="tile' . ($knownCount > 0 ? ' warn' : '') . '"><b>' . $knownCount . '</b><span>z toho „už povoleno“</span></div>'
+            . '</div>';
+
+        // graf: zamitnuta zarizeni po dnech (jedna rada, popisek jen u maxima a dneska, detail pri najeti mysi)
+        $max = max(1, max(array_column($perDay, 'rej')));
+        $maxDay = array_search(max(array_column($perDay, 'rej')), array_column($perDay, 'rej'), true);
+        $step = (int)ceil($days / 10); // popisky osy nejvys u 10 dni (at se nepekryvaji ani na mobilu)
+        echo '<div class="card"><h2>Zamítnutá zařízení po dnech</h2><div class="bars">';
+        $i = 0;
+        foreach ($perDay as $den => $x) {
+            $dt = new DateTimeImmutable($den);
+            $tip = $dt->format('j. n.') . ': ' . $x['rej'] . ' zařízení, ' . $x['rejTry'] . ' pokusů';
+            $label = ($i === $maxDay || $i === $days - 1) && $x['rej'] > 0 ? '<b>' . $x['rej'] . '</b>' : '';
+            echo '<div class="bar" data-tip="' . h($tip) . '" aria-label="' . h($tip) . '">' . $label
+                . '<span style="height:' . round($x['rej'] / $max * 100, 1) . '%"></span></div>';
+            $i++;
+        }
+        echo '</div><div class="bars-axis">';
+        $i = 0;
+        foreach ($perDay as $den => $x) {
+            // popisky v pravidelnych rozestupech od dneska zpet
+            echo '<small>' . (($days - 1 - $i) % $step === 0 ? h((new DateTimeImmutable($den))->format('j.n.')) : '') . '</small>';
+            $i++;
+        }
+        echo '</div>';
+        echo '<details><summary>Tabulka po dnech</summary><table><tr><th>Den</th><th>Zamítnutá zařízení</th><th>Pokusů</th><th>Povolená zařízení</th></tr>';
+        foreach (array_reverse($perDay, true) as $den => $x) {
+            echo '<tr><td class="mono nowrap">' . h((new DateTimeImmutable($den))->format('j. n. Y')) . '</td><td>' . $x['rej'] . '</td><td>'
+                . $x['rejTry'] . '</td><td class="mut">' . $x['acc'] . '</td></tr>';
+        }
+        echo '</table></details></div>';
+
+        // zarizeni
+        $keep = ['p' => 'zamitnuta', 'd' => $daysAsked, 'u' => $onlyUnknown ? '1' : ''];
+        $th = function (string $key, string $label) use ($keep, $o, $dir): string {
+            $next = $o === $key && $dir === 'asc' ? 'desc' : 'asc';
+            return '<th><a class="sort" href="' . h('?' . http_build_query($keep + ['o' => $key, 'dir' => $next])) . '">' . $label
+                . ($o === $key ? ($dir === 'asc' ? ' ▲' : ' ▼') : '') . '</a></th>';
+        };
+        echo '<p class="mut">Zobrazeno ' . min(count($rows), 500) . ' z ' . count($rows) . ' zařízení. „Dní“ = kolik různých dní se zařízení zkoušelo připojit.</p>';
+        echo '<div class="scroll"><table><tr>' . $th('mac', 'MAC') . $th('pokusu', 'Pokusů') . $th('dni', 'Dní')
+            . $th('prvni', 'První') . $th('naposledy', 'Naposledy') . '<th>Stav</th><th></th></tr>';
+        foreach (array_slice($rows, 0, 500) as $r) {
             echo '<tr><td class="mono">' . h($r['mac'])
                 . (is_random_mac($r['mac']) ? ' <span class="tag">náhodná</span>' : '') . '</td>'
-                . '<td>' . (int)$r['pokusu'] . '</td><td class="mut">' . h($r['prvni']) . '</td><td>' . h($r['naposledy']) . '</td>'
-                . '<td>' . ($known ? 'už povoleno' : '') . '</td>'
-                . '<td>' . ($known ? '' : '<a href="?p=pridat&zpet=zamitnuta&mac=' . urlencode($norm) . '">povolit…</a>') . '</td></tr>';
+                . '<td>' . (int)$r['pokusu'] . '</td><td>' . (int)$r['dni'] . '</td>'
+                . '<td class="mut">' . h(substr((string)$r['prvni'], 0, 16)) . '</td><td>' . h(substr((string)$r['naposledy'], 0, 16)) . '</td>'
+                . '<td>' . ($r['known'] ? 'už povoleno' : '') . '</td>'
+                . '<td>' . ($r['known'] ? '' : '<a href="?p=pridat&zpet=zamitnuta&mac=' . urlencode($r['norm']) . '">povolit…</a>') . '</td></tr>';
         }
         echo '</table></div>';
         break;
@@ -592,6 +694,10 @@ Změna v seznamu platí hned pro další připojení – nic se nerestartuje.</p
 
 <div class="card help" id="zamitnuta">
 <h2>Zamítnutá zařízení</h2>
+<p>Nahoře je souhrn za zvolené období (zamítnutá zařízení, pokusy, průměr za den, kolik z nich je „už povoleno“) a graf zamítnutých zařízení po dnech –
+detail dne ukáže najetí myší, přesná čísla i s počtem povolených zařízení jsou pod grafem v <em>Tabulce po dnech</em>.
+Tabulku zařízení jde třídit klikem na záhlaví; <em>Dní</em> je počet různých dní, kdy se zařízení zkoušelo připojit (vysoké číslo = žák to zkouší opakovaně, nejspíš má špatně zadanou adresu).
+<em>Jen nepovolená</em> skryje řádky „už povoleno“.</p>
 <p>Zařízení, která se za posledních {$rejDays} dní (lze změnit) zkusila připojit a server je odmítl. Odkazem <em>povolit…</em> zařízení rovnou přidáte.
 Žák, kterému wifi nejde, tu typicky najde svou adresu – porovnejte ji s tou, kterou zadal do formuláře.</p>
 <p><strong>Stav „už povoleno“</strong> znamená: zařízení <em>je</em> v seznamu povolených, a přesto bylo odmítnuto. Aplikace adresu převede na standardní zápis
