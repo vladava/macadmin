@@ -116,7 +116,7 @@ systemctl enable --now radiusd
 Test jednou povolenou MAC (z tabulky radcheck):
 
 ```
-radtest D8:0B:9A:05:B7:32 D8:0B:9A:05:B7:32 127.0.0.1 0 testing123
+radtest AA:BB:CC:DD:EE:FF AA:BB:CC:DD:EE:FF 127.0.0.1 0 testing123
 ```
 
 Očekávaný výsledek: `Received Access-Accept`. Pro neznámou MAC: `Access-Reject`.
