@@ -3,6 +3,16 @@ declare(strict_types=1);
 require __DIR__ . '/lib.php';
 
 start_session();
+
+/** Hlaska o zarizenich, ktera hromadne mazani vynechalo (nejsou zakovska). */
+function flash_kept(array $others): void
+{
+    if ($others) {
+        flash('Nesmazáno ' . count($others) . ' zařízení bez žákovského e-mailu (' . student_domain() . '): '
+            . implode(', ', array_slice($others, 0, 30)) . (count($others) > 30 ? ' …' : '')
+            . '. Smazat je jde jednotlivě přes upravit → Smazat zařízení.', 'err');
+    }
+}
 ob_start(); // pri chybe DB zahodit rozpracovanou stranku
 $p = $_GET['p'] ?? 'zarizeni';
 $post = $_SERVER['REQUEST_METHOD'] === 'POST';
@@ -66,14 +76,23 @@ try {
             $st = db()->prepare('SELECT r.username FROM radcheck r LEFT JOIN mac_info i ON i.mac = r.username WHERE '
                 . implode(' AND ', $f['where']));
             $st->execute($f['args']);
-            flash('Smazáno zařízení: ' . delete_devices($st->fetchAll(PDO::FETCH_COLUMN)) . '. Vrátit je jde na stránce Smazaná.');
+            [$students, $others] = split_student_devices($st->fetchAll(PDO::FETCH_COLUMN));
+            flash('Smazáno zařízení žáků: ' . delete_devices($students) . '. Vrátit je jde na stránce Smazaná.');
+            flash_kept($others);
             redirect('?p=zarizeni');
         }
         if ($post && isset($_POST['delete'])) {
             // presny zapis z databaze, aby sly smazat i nestandardni a neplatne zaznamy
             $macs = array_values(array_filter(array_map('strval', (array)($_POST['mac'] ?? [])), fn($m) => $m !== ''));
-            $n = delete_devices($macs);
-            flash("Smazáno zařízení: $n. Vrátit je jde na stránce Smazaná.");
+            if (!empty($_POST['jedno'])) {
+                // jedno konkretni zarizeni z jeho stranky (upravit) - smaze se vzdy, i kdyz neni zakovske
+                $n = delete_devices($macs);
+                flash("Smazáno zařízení: $n. Vrátit ho jde na stránce Smazaná.");
+            } else {
+                [$students, $others] = split_student_devices($macs);
+                flash('Smazáno zařízení žáků: ' . delete_devices($students) . '. Vrátit je jde na stránce Smazaná.');
+                flash_kept($others);
+            }
             if (($_POST['zpet'] ?? '') === 'udrzba') {
                 redirect('?p=udrzba');
             }
@@ -170,8 +189,16 @@ try {
         }
         echo '</table></div><p class="row"><button class="danger" name="delete" value="1" onclick="return confirm(\'Opravdu smazat vybraná zařízení?\')">Smazat vybrané</button>';
         if ($f['active'] && $found > 0) {
-            echo '<button class="danger" name="delete_all" value="1" onclick="return confirm(\'Opravdu smazat všech ' . $found . ' nalezených zařízení?\')">'
-                . 'Smazat všech ' . $found . ' nalezených</button>';
+            $st = db()->prepare("SELECT COUNT(*) $from AND LOWER(i.poznamka) LIKE ?");
+            $st->execute(array_merge($args, ['%' . addcslashes(student_domain(), '%_\\')]));
+            $stud = (int)$st->fetchColumn();
+            if ($stud > 0) {
+                echo '<button class="danger" name="delete_all" value="1" onclick="return confirm(\'Opravdu smazat ' . $stud . ' nalezených zařízení žáků?\')">'
+                    . 'Smazat ' . $stud . ' nalezených zařízení žáků</button>';
+            }
+            if ($found > $stud) {
+                echo '<span class="mut">Bez žákovského e-mailu (' . h(student_domain()) . '): ' . ($found - $stud) . ' – hromadně se nesmažou.</span>';
+            }
         }
         echo '</p></form>';
         break;
@@ -234,8 +261,11 @@ try {
             . '<label>Poznámka<input name="poznamka" value="' . h($d['poznamka']) . '" size="30" maxlength="255"></label></div>'
             . '<button>' . ($isEdit ? 'Uložit' : 'Přidat') . '</button></form>';
         if ($isEdit) {
-            echo '<form method="post" action="?p=zarizeni" onsubmit="return confirm(\'Opravdu smazat toto zařízení?\')">' . csrf_field()
+            $ask = is_student_email((string)$d['poznamka']) ? 'Opravdu smazat toto zařízení?'
+                : 'Toto zařízení nemá žákovský e-mail (učitel, technika…). Opravdu ho smazat?';
+            echo '<form method="post" action="?p=zarizeni" onsubmit="return confirm(\'' . h($ask) . '\')">' . csrf_field()
                 . '<input type="hidden" name="mac[]" value="' . h($edit) . '"><input type="hidden" name="zpet" value="' . h($zpet) . '">'
+                . '<input type="hidden" name="jedno" value="1">'
                 . '<button class="danger" name="delete" value="1">Smazat zařízení</button></form>';
             $st = db()->prepare('SELECT reply, authdate FROM radpostauth WHERE username = ? ORDER BY authdate DESC LIMIT 20');
             $st->execute([$edit]);
@@ -614,7 +644,8 @@ try {
         }
         echo '</div>';
         echo '<div class="card"><h2>Promazání historie přihlášení</h2><p class="mut">Smaže záznamy z <code>radpostauth</code> starší než '
-            . (int)cfg('postauth_keep_days') . ' dní. Automaticky to dělá i <code>udrzba.php</code> z cronu.</p>'
+            . (int)cfg('postauth_keep_days') . ' dní. Automaticky to dělá i <code>udrzba.php</code> z cronu. '
+            . 'Maže se jen historie pokusů o připojení – povolená zařízení zůstávají.</p>'
             . '<form method="post">' . csrf_field() . '<button name="prune" value="1" class="sec">Promazat nyní</button></form></div>';
         echo '<div class="card"><h2>Nestandardní zápis MAC (' . count($bad) . ')</h2>'
             . '<p class="mut">FreeRADIUS hledá adresu ve tvaru <code>AA:BB:CC:DD:EE:FF</code>. Jinak zapsané adresy nemusí projít ověřením.</p>';
@@ -688,8 +719,10 @@ Změna v seznamu platí hned pro další připojení – nic se nerestartuje.</p
 <li><strong>Zařízení na e-mail aspoň</strong> – žáci s více zařízeními (např. 3 a víc): kdo si několikrát vyměnil telefon, nebo sdílí účet. Stará zařízení poznáte podle sloupce <em>Naposledy</em>.</li>
 <li><strong>Smazaná zařízení si aplikace pamatuje</strong> a import z Forms je znovu nepřidá, i když jsou pořád v Excelu. Vrátit je jde na stránce <a href="#smazana">Smazaná</a>.</li>
 <li><strong>upravit</strong> – úprava údajů; dole je i posledních 20 pokusů o připojení (povoleno / zamítnuto), hodí se, když žák tvrdí, že mu wifi nejde.</li>
-<li>Zaškrtnutí všech v hlavičce platí jen pro aktuální stránku (max. 500 zařízení). Když je zadaný nějaký filtr, tlačítko <strong>Smazat všech N nalezených</strong> smaže všechna nalezená zařízení i přes víc stránek.</li>
-<li><strong>Ročník po maturitě</strong> – vyberte třídu (např. <code>2022.a</code>), <em>Filtrovat</em> a <em>Smazat všech N nalezených</em>.</li>
+<li>Zaškrtnutí všech v hlavičce platí jen pro aktuální stránku (max. 500 zařízení). Když je zadaný nějaký filtr, tlačítko <strong>Smazat N nalezených zařízení žáků</strong> smaže všechna nalezená žákovská zařízení i přes víc stránek.</li>
+<li><strong>Hromadné mazání maže jen zařízení žáků</strong> – s e-mailem končícím <code>@stu.gfp.cz</code> (nastavení <code>student_email_domain</code>). Ostatní (učitelé, technika, zařízení bez e-mailu) jen vypíše a nechá; smazat je jde jednotlivě přes <em>upravit → Smazat zařízení</em>, kde se aplikace ještě zeptá.
+Noční údržba zařízení nemaže vůbec – jen historii přihlášení starší než 90 dní.</li>
+<li><strong>Ročník po maturitě</strong> – vyberte třídu (např. <code>2022.a</code>), <em>Filtrovat</em> a <em>Smazat N nalezených zařízení žáků</em>.</li>
 </ul>
 </div>
 

@@ -275,6 +275,44 @@ function delete_devices(array $macs): int
     }
 }
 
+/** Domena zakovskych e-mailu (student_email_domain v config.php, vychozi @stu.gfp.cz). */
+function student_domain(): string
+{
+    return strtolower((string)(cfg('student_email_domain') ?? '@stu.gfp.cz')) ?: '@stu.gfp.cz';
+}
+
+function is_student_email(string $email): bool
+{
+    return str_ends_with(strtolower(trim($email)), student_domain());
+}
+
+/**
+ * Rozdeli zarizeni (zapis z radcheck) na zakovska (e-mail v poznamce konci student_domain) a ostatni.
+ * Vraci [zakovska MAC, ostatni jako "MAC (jmeno)"].
+ */
+function split_student_devices(array $macs): array
+{
+    if (!$macs) {
+        return [[], []];
+    }
+    $st = db()->prepare('SELECT mac, jmeno, poznamka FROM mac_info WHERE mac IN (' . implode(',', array_fill(0, count($macs), '?')) . ')');
+    $st->execute(array_values($macs));
+    $info = [];
+    foreach ($st as $r) {
+        $info[strtoupper((string)$r['mac'])] = $r;
+    }
+    $students = $others = [];
+    foreach ($macs as $m) {
+        $i = $info[strtoupper((string)$m)] ?? null;
+        if ($i !== null && is_student_email((string)$i['poznamka'])) {
+            $students[] = $m;
+        } else {
+            $others[] = $m . ($i !== null && $i['jmeno'] !== '' ? ' (' . $i['jmeno'] . ')' : '');
+        }
+    }
+    return [$students, $others];
+}
+
 /** Obnovi smazana zarizeni i s ulozenymi udaji. Vraci pocet obnovenych. */
 function restore_devices(array $macs): int
 {

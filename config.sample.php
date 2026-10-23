@@ -27,6 +27,10 @@ return [
     // Posila se pres mistni postfix (PHP mail()); vyzkouset: php import-forms.php --test-mail
     'alert_email' => '',
 
+    // Hromadne mazani v seznamu zarizeni smaze jen zarizeni s e-mailem zaka (poznamka konci touto domenou);
+    // ostatni (ucitele, technika) jen vypise - smazat je jde jednotlive pres upravit.
+    'student_email_domain' => '@stu.gfp.cz',
+
     // Kolik dni historie prihlaseni (radpostauth) uchovavat
     'postauth_keep_days' => 90,
 
