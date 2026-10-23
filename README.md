@@ -203,3 +203,7 @@ mysql -u root -p radius < radius-data.sql
 Konfiguraci FreeRADIUS nekopírujte celou – na novém serveru nechte výchozí a přeneste jen změněné hodnoty (klienti
 z `clients.conf`, přístup k DB). Po instalaci rozhraní spusťte v Údržbě **Opravit zápis** (sjednotí nestandardně zapsané MAC)
 a `setup.sql` odstraní duplicitní záznamy. Pak ve wifi řadiči přepněte IP RADIUS serveru; návrat je jen vrácení původní IP.
+
+## Licence
+
+[MIT](LICENSE) – kdokoli může aplikaci zdarma používat, upravovat i šířit, jen musí zachovat informaci o autorovi a licenci. Bez záruky.
