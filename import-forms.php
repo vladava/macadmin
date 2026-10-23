@@ -77,5 +77,6 @@ state_set('import', array_merge($st, ['last_ok' => now(), 'added' => $s['added']
 log_import('OneDrive – automaticky', $s);
 if ($s['added'] || $s['filled']) {
     echo now() . " import: pridano $s[added], doplneno $s[filled]"
-        . ($s['new'] ? ': ' . implode(', ', $s['new']) : '') . "\n";
+        . ($s['new'] ? ': ' . implode(', ', $s['new']) : '')
+        . ($s['readded'] ? '; znovu po smazani: ' . implode(', ', $s['readded']) : '') . "\n";
 }

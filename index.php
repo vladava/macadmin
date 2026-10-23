@@ -471,10 +471,14 @@ try {
                     flash('Přidáno: ' . implode(', ', array_slice($s['new'], 0, 60)) . (count($s['new']) > 60 ? ' …' : ''));
                 }
                 flash('Použité sloupce – MAC: ' . implode(', ', array_map($nm, $c['macs'])) . '; jméno: ' . $nm($c['jmeno'])
-                    . '; třída: ' . $nm($c['trida']) . '; poznámka (e-mail): ' . $nm($c['email']));
+                    . '; třída: ' . $nm($c['trida']) . '; poznámka (e-mail): ' . $nm($c['email']) . '; čas registrace: ' . $nm($c['cas']));
+                if ($s['readded']) {
+                    flash('Znovu přidáno – registrováno znovu po smazání (' . count($s['readded']) . '): ' . implode(', ', array_slice($s['readded'], 0, 40)) . '.');
+                }
                 if ($s['ignored']) {
-                    flash('Přeskočeno – dříve smazaná zařízení (' . count($s['ignored']) . '): ' . implode(', ', array_slice($s['ignored'], 0, 40))
-                        . (count($s['ignored']) > 40 ? ' …' : '') . '. Znovu je povolíte ručně přes Přidat.');
+                    flash('Přeskočeno – dříve smazaná zařízení, registrace je starší než smazání (' . count($s['ignored']) . '): '
+                        . implode(', ', array_slice($s['ignored'], 0, 40)) . (count($s['ignored']) > 40 ? ' …' : '')
+                        . '. Znovu je povolíte na stránce Smazaná nebo přes Přidat.');
                 }
                 if ($s['bad']) {
                     flash('Neplatná MAC (řádek: hodnota): ' . implode(' | ', array_slice($s['bad'], 0, 40)), 'err');
@@ -736,7 +740,7 @@ Změna v seznamu platí hned pro další připojení – nic se nerestartuje.</p
 <li><strong>Naposledy</strong> – poslední úspěšné připojení k wifi. Historie se uchovává {$keepDays} dní, „–“ znamená, že se zařízení za tu dobu nepřipojilo.</li>
 <li><strong>Nepřihlášeno aspoň (dní)</strong> – zařízení, která se tak dlouho nepřipojila. Hodí se na úklid: vyfiltrovat, zaškrtnout vše v hlavičce tabulky, <em>Smazat vybrané</em>. Dokud historie nepokrývá zvolený počet dní, ukáže se červené upozornění, že výsledek není spolehlivý.</li>
 <li><strong>Zařízení na e-mail aspoň</strong> – žáci s více zařízeními (např. 3 a víc): kdo si několikrát vyměnil telefon, nebo sdílí účet. Stará zařízení poznáte podle sloupce <em>Naposledy</em>.</li>
-<li><strong>Smazaná zařízení si aplikace pamatuje</strong> a import z Forms je znovu nepřidá, i když jsou pořád v Excelu. Vrátit je jde na stránce <a href="#smazana">Smazaná</a>.</li>
+<li><strong>Smazaná zařízení si aplikace pamatuje</strong> a import z Forms je znovu nepřidá, i když jsou pořád v Excelu – ledaže je adresa v Excelu zaregistrovaná znovu <em>po</em> smazání (viz <a href="#smazana">Smazaná</a>).</li>
 <li><strong>upravit</strong> – úprava údajů; dole je i posledních 20 pokusů o připojení (povoleno / zamítnuto), hodí se, když žák tvrdí, že mu wifi nejde.</li>
 <li>Zaškrtnutí všech v hlavičce platí jen pro aktuální stránku (max. 500 zařízení). Když je zadaný nějaký filtr, tlačítko <strong>Smazat N nalezených zařízení žáků</strong> smaže všechna nalezená žákovská zařízení i přes víc stránek.</li>
 <li><strong>Hromadné mazání</strong> – {$domainText}
@@ -767,6 +771,10 @@ Tabulku zařízení jde třídit klikem na záhlaví; <em>Dní</em> je počet r�
 <h2>Smazaná zařízení</h2>
 <p>Každé smazání se zapamatuje i se jménem, třídou a poznámkou. Na stránce <a href="?p=smazana">Smazaná</a> je vidět posledních pět mazání –
 <strong>Obnovit vše z tohoto mazání</strong> vrátí celé hromadné smazání najednou (třeba když se nepovedl filtr). Jednotlivá zařízení obnovíte zaškrtnutím a <em>Obnovit vybrané</em>.</p>
+<p><strong>Nová registrace po smazání:</strong> když má Excel sloupec s časem registrace (<em>Čas</em> z toku Power Automate, <em>Čas dokončení</em> z exportu Forms),
+import porovná čas registrace s časem smazání. Starší registrace (např. starší sourozenec, vyřazený ročník) zůstane smazaná; registrace odeslaná až po smazání zařízení
+znovu přidá a vypíše ho jako „Znovu přidáno“. U adresy uvedené v Excelu vícekrát rozhoduje nejnovější registrace (i jméno a e-mail se berou z ní).
+Kdo adresu měl dřív, je vidět tady ve sloupcích Jméno a Smazáno.</p>
 <p><em>Zapomenout vybrané</em> záznam o smazání odstraní – další import z Forms pak zařízení znovu přidá, pokud je pořád v Excelu. Hodí se, když jste smazali omylem a žák mezitím nic nemění.</p>
 </div>
 

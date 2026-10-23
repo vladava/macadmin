@@ -689,11 +689,23 @@ function detect_columns(array $rows): array
     }
     $first = $macs[0];
     $header = normalize_mac($rows[0][$first] ?? '') === null;
-    $res = ['macs' => $macs, 'jmeno' => null, 'trida' => null, 'email' => null, 'header' => $header, 'names' => $rows[0]];
+    $res = ['macs' => $macs, 'jmeno' => null, 'trida' => null, 'email' => null, 'cas' => null, 'header' => $header, 'names' => $rows[0]];
     if ($header) {
+        $casScore = 0;
         foreach ($rows[0] as $i => $h) {
             $hl = mb_strtolower($h);
             if (in_array($i, $macs, true)) {
+                continue;
+            }
+            // cas odeslani registrace: "Čas dokončení" (export Forms) / "Čas" (tok Power Automate) ma prednost pred "Počáteční čas"
+            $score = preg_match('/dokonč|dokonc|completion|odesl|submission/u', $hl) ? 3
+                : (preg_match('/^(čas|cas|time|datum|date)$/u', $hl) ? 2 : (preg_match('/čas|time|datum|date/u', $hl) ? 1 : 0));
+            if ($score > $casScore) {
+                $res['cas'] = $i;
+                $casScore = $score;
+                continue;
+            }
+            if ($score > 0) {
                 continue;
             }
             if ($res['trida'] === null && preg_match('/tř[ií]d|trid|class/u', $hl)) {
@@ -716,17 +728,34 @@ function detect_columns(array $rows): array
     return $res;
 }
 
+/** Cas registrace z bunky: cislo data z Excelu nebo text (21.10.2026 12:03, 10/21/2026 12:03 PM, ISO). Vraci 'Y-m-d H:i:s' nebo null. */
+function parse_row_time(string $v): ?string
+{
+    $v = trim($v);
+    if ($v === '') {
+        return null;
+    }
+    if (is_numeric($v) && (float)$v > 20000 && (float)$v < 100000) {
+        return gmdate('Y-m-d H:i:s', (int)round(((float)$v - 25569) * 86400)); // seriove cislo Excelu (dny od 30. 12. 1899)
+    }
+    $ts = strtotime($v);
+    return $ts === false ? null : date('Y-m-d H:i:s', $ts);
+}
+
 /**
  * Import bez prepisovani: nove MAC prida, u existujicich jen doplni prazdne udaje.
- * Drive smazana zarizeni (mac_smazane) znovu nepridava. Vraci statistiku.
+ * Drive smazana zarizeni (mac_smazane) znovu neprida - ledaze soubor ma cas registrace a registrace je novejsi
+ * nez smazani (zarizeni nekdo registroval znovu, napr. po starsim sourozenci). U MAC uvedene vickrat rozhoduje
+ * nejnovejsi registrace. Vraci statistiku.
  */
 function import_rows(array $rows): array
 {
     $c = detect_columns($rows);
-    $stat = ['added' => 0, 'filled' => 0, 'skipped' => 0, 'new' => [], 'ignored' => [], 'bad' => [], 'random' => [], 'cols' => $c];
+    $stat = ['added' => 0, 'filled' => 0, 'skipped' => 0, 'new' => [], 'readded' => [], 'ignored' => [], 'bad' => [], 'random' => [], 'cols' => $c];
     $pdo = db();
-    $deleted = $pdo->prepare('SELECT 1 FROM mac_smazane WHERE mac = ?');
-    $seen = [];
+
+    // 1) radky -> MAC s udaji z nejnovejsi registrace
+    $entries = [];
     foreach ($rows as $idx => $r) {
         if ($idx === 0 && $c['header']) {
             continue;
@@ -734,8 +763,9 @@ function import_rows(array $rows): array
         $jmeno = $c['jmeno'] !== null ? mb_substr($r[$c['jmeno']] ?? '', 0, 100) : '';
         $trida = $c['trida'] !== null ? mb_substr($r[$c['trida']] ?? '', 0, 20) : '';
         $pozn  = $c['email'] !== null ? mb_substr($r[$c['email']] ?? '', 0, 255) : '';
+        $cas   = $c['cas'] !== null ? parse_row_time($r[$c['cas']] ?? '') : null;
         if ($trida === '') {
-            $trida = trida_z_emailu($pozn); // Forms tridu nema, je v e-mailu zaka
+            $trida = trida_z_emailu($pozn); // Forms tridu nema, muze byt v e-mailu zaka
         }
         $badInRow = [];
         foreach ($c['macs'] as $col) {
@@ -753,37 +783,50 @@ function import_rows(array $rows): array
                 }
                 continue;
             }
-            if (isset($seen[$mac])) {
-                continue; // stejna MAC vicekrat v souboru
+            $prev = $entries[$mac] ?? null;
+            if ($prev === null || ($cas !== null && ($prev['cas'] === null || $cas > $prev['cas']))) {
+                $entries[$mac] = ['jmeno' => $jmeno, 'trida' => $trida, 'pozn' => $pozn, 'cas' => $cas];
             }
-            $seen[$mac] = true;
-            $label = $mac . ($jmeno !== '' ? " ($jmeno)" : '');
-            if (!mac_exists($mac)) {
-                $deleted->execute([$mac]);
-                if ($deleted->fetchColumn()) {
-                    $stat['ignored'][] = $label;
+        }
+    }
+
+    // 2) zapis
+    $deleted = $pdo->prepare('SELECT smazano FROM mac_smazane WHERE mac = ?');
+    foreach ($entries as $mac => $e) {
+        $label = $mac . ($e['jmeno'] !== '' ? " ($e[jmeno])" : '');
+        if (!mac_exists($mac)) {
+            $deleted->execute([$mac]);
+            $smazano = $deleted->fetchColumn();
+            $readd = false;
+            if ($smazano !== false) {
+                if ($e['cas'] === null || $e['cas'] <= (string)$smazano) {
+                    $stat['ignored'][] = $label . ($e['cas'] !== null ? ', registrace ' . substr($e['cas'], 0, 10) : '');
                     continue;
                 }
-                save_device($mac, $jmeno, $trida, $pozn);
-                $stat['added']++;
-                $stat['new'][] = $label;
-                if (is_random_mac($mac)) {
-                    $stat['random'][] = $label;
-                }
-                continue;
+                $readd = true; // registrovano znovu po smazani
             }
-            // existujici: doplnit jen prazdna pole
-            $pdo->prepare("INSERT IGNORE INTO mac_info (mac) VALUES (?)")->execute([$mac]);
-            $st = $pdo->prepare(
-                "UPDATE mac_info SET
-                   jmeno = IF(jmeno = '', ?, jmeno),
-                   trida = IF(trida = '', ?, trida),
-                   poznamka = IF(poznamka = '', ?, poznamka)
-                 WHERE mac = ?"
-            );
-            $st->execute([$jmeno, $trida, $pozn, $mac]);
-            $st->rowCount() > 0 ? $stat['filled']++ : $stat['skipped']++;
+            save_device($mac, $e['jmeno'], $e['trida'], $e['pozn']); // smaze i zaznam v mac_smazane
+            $stat['added']++;
+            $stat['new'][] = $label;
+            if ($readd) {
+                $stat['readded'][] = $label;
+            }
+            if (is_random_mac($mac)) {
+                $stat['random'][] = $label;
+            }
+            continue;
         }
+        // existujici: doplnit jen prazdna pole
+        $pdo->prepare("INSERT IGNORE INTO mac_info (mac) VALUES (?)")->execute([$mac]);
+        $st = $pdo->prepare(
+            "UPDATE mac_info SET
+               jmeno = IF(jmeno = '', ?, jmeno),
+               trida = IF(trida = '', ?, trida),
+               poznamka = IF(poznamka = '', ?, poznamka)
+             WHERE mac = ?"
+        );
+        $st->execute([$e['jmeno'], $e['trida'], $e['pozn'], $mac]);
+        $st->rowCount() > 0 ? $stat['filled']++ : $stat['skipped']++;
     }
     return $stat;
 }
