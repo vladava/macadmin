@@ -32,20 +32,59 @@ function db(): PDO
     return $pdo;
 }
 
-/** Prevede libovolny zapis MAC na AA:BB:CC:DD:EE:FF, nebo vrati null. Pismeno O bere jako nulu (casty preklep). */
+/** Zamenitelne znaky -> 0-9/A-F: O->0, I/l->1, cyrilice a recka (A B C E), znaky plne sirky. */
+const MAC_LOOKALIKES = [
+    'O' => '0', 'o' => '0', 'I' => '1', 'l' => '1',
+    'А' => 'A', 'а' => 'a', 'В' => 'B', 'С' => 'C', 'с' => 'c', 'Е' => 'E', 'е' => 'e', // cyrilice
+    'Α' => 'A', 'Β' => 'B', 'Ε' => 'E',                                                     // recka
+];
+
+/**
+ * Prevede zapis MAC na AA:BB:CC:DD:EE:FF, nebo vrati null.
+ * Zvladne mala pismena, oddelovace : - . mezera (i smisene), zapis bez oddelovacu, aabb.ccdd.eeff,
+ * vynechane nuly (4:84:d3:...), zamenitelne znaky (MAC_LOOKALIKES) a MAC uprostred textu ("MAC: aa:bb:...").
+ * Z bezneho textu MAC neposklada - mimo nalezeny tvar MAC smi hodnota obsahovat jen hexa znaky a oddelovace.
+ */
 function normalize_mac(string $s): ?string
 {
-    $hex = strtoupper(preg_replace('/[^0-9A-Fa-f]/', '', str_ireplace('O', '0', $s)));
-    if (strlen($hex) !== 12) {
+    $s = strtr(mb_convert_kana(trim($s), 'a', 'UTF-8'), MAC_LOOKALIKES); // plna sirka -> ASCII
+    if ($s === '') {
         return null;
     }
-    return implode(':', str_split($hex, 2));
+    // 1) tvar MAC v textu: 6 skupin po 1-2 znacich se stejnym oddelovacem, aabb.ccdd.eeff, nebo 12 znaku v kuse
+    // hranice: pred/za MAC nesmi byt pismeno, cislice ani oddelovac (jinak by z "78:BH" vzniklo "78:0B")
+    $re = '/(?<![\p{L}\p{N}:.-])(?:[0-9A-F]{1,2}([:.\- ])(?:[0-9A-F]{1,2}\1){4}[0-9A-F]{1,2}|[0-9A-F]{4}\.[0-9A-F]{4}\.[0-9A-F]{4}|[0-9A-F]{12})(?![\p{L}\p{N}:.-])/iu';
+    if (preg_match_all($re, $s, $m) === 1) {
+        $found = $m[0][0];
+        $groups = preg_split('/[:.\- ]/', $found);
+        $hex = count($groups) === 6
+            ? implode('', array_map(fn($g) => str_pad($g, 2, '0', STR_PAD_LEFT), $groups)) // doplnit vynechane nuly
+            : str_replace('.', '', $found);
+    } else {
+        // 2) cela hodnota: hexa znaky a cokoli, co neni pismeno ani cislice, jako oddelovac
+        //    (i smisene a preklepy z ceske klavesnice: AA:BB-CC:DD-EE:FF, 34:1C:f0:1e:64?83, dc:6a"e7:...)
+        $hex = preg_replace('/[^\p{L}\p{N}]/u', '', $s);
+        if (!preg_match('/^[0-9A-F]{12}$/i', $hex)) {
+            return null;
+        }
+    }
+    return implode(':', str_split(strtoupper($hex), 2));
 }
 
-/** Rok nastupu a pismeno tridy ze skolniho e-mailu zaka (2026.g.prijmeni@stu.gfp.cz -> 2026.g), jinak ''. */
+/** Trida z e-mailu zaka podle trida_regex v config.php (prvni zavorka), jinak ''. */
 function trida_z_emailu(string $email): string
 {
-    return preg_match('/^(\d{4})\.([a-z])\./i', trim($email), $m) ? $m[1] . '.' . strtolower($m[2]) : '';
+    $re = (string)cfg('trida_regex');
+    if ($re === '' || @preg_match($re, trim($email), $m) !== 1 || !isset($m[1])) {
+        return '';
+    }
+    return mb_substr(strtolower($m[1]), 0, 20);
+}
+
+/** Nazev wifi site pro texty v rozhrani (wifi_name v config.php). */
+function wifi_name(): string
+{
+    return trim((string)cfg('wifi_name')) ?: 'wifi';
 }
 
 /** Nahodna (soukroma) MAC: druhy znak 2, 6, A nebo E. */
@@ -275,15 +314,16 @@ function delete_devices(array $macs): int
     }
 }
 
-/** Domena zakovskych e-mailu (student_email_domain v config.php, vychozi @stu.gfp.cz). */
+/** Domena zakovskych e-mailu (student_email_domain v config.php); '' = bez omezeni. */
 function student_domain(): string
 {
-    return strtolower((string)(cfg('student_email_domain') ?? '@stu.gfp.cz')) ?: '@stu.gfp.cz';
+    return strtolower(trim((string)cfg('student_email_domain')));
 }
 
+/** Je zarizeni zakovske (smi ho smazat hromadne mazani)? Bez nastavene domeny jsou zakovska vsechna. */
 function is_student_email(string $email): bool
 {
-    return str_ends_with(strtolower(trim($email)), student_domain());
+    return student_domain() === '' || str_ends_with(strtolower(trim($email)), student_domain());
 }
 
 /**
@@ -814,7 +854,7 @@ function send_alert(string $subject, string $body): bool
     }
     $host = gethostname() ?: 'localhost';
     $headers = [
-        'From'                      => 'macadmin <macadmin@' . $host . '>',
+        'From'                      => trim((string)cfg('alert_from')) ?: 'macadmin <macadmin@' . $host . '>',
         'MIME-Version'              => '1.0',
         'Content-Type'              => 'text/plain; charset=UTF-8',
         'Content-Transfer-Encoding' => '8bit',
@@ -837,9 +877,9 @@ function page_header(string $title, string $active = ''): void
     ];
     echo '<!doctype html><html lang="cs"><head><meta charset="utf-8">'
         . '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        . '<title>' . h($title) . ' – MAC wifi GFP</title><style>' . css() . '</style></head><body>';
+        . '<title>' . h($title) . ' – ' . h(app_name()) . '</title><style>' . css() . '</style></head><body>';
     if (is_logged_in()) {
-        echo '<nav><strong>Wifi GFP – MAC adresy</strong>';
+        echo '<nav><strong>' . h(app_name()) . '</strong>';
         foreach ($menu as $k => $v) {
             echo '<a href="?p=' . $k . '"' . ($k === $active ? ' class="on"' : '') . '>' . $v . '</a>';
         }
@@ -863,9 +903,21 @@ function app_version(): string
     return $date . ($hash !== '' ? " ($hash)" : '');
 }
 
+function app_name(): string
+{
+    return trim((string)cfg('app_name')) ?: 'Správa MAC adres';
+}
+
+/** Volby z config.sample.php, ktere v config.php chybi (zobrazi Udrzba). */
+function missing_config_keys(): array
+{
+    $sample = @include __DIR__ . '/config.sample.php';
+    return is_array($sample) ? array_values(array_diff(array_keys($sample), array_keys(cfg()))) : [];
+}
+
 function page_footer(): void
 {
-    echo '</main><footer>macadmin – správa MAC adres pro wifi GFP · verze ' . h(app_version())
+    echo '</main><footer>macadmin – správa MAC adres pro FreeRADIUS · verze ' . h(app_version())
         . ' · autor ' . h(APP_AUTHOR) . '</footer></body></html>';
 }
 

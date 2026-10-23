@@ -77,7 +77,7 @@ try {
                 . implode(' AND ', $f['where']));
             $st->execute($f['args']);
             [$students, $others] = split_student_devices($st->fetchAll(PDO::FETCH_COLUMN));
-            flash('Smazáno zařízení žáků: ' . delete_devices($students) . '. Vrátit je jde na stránce Smazaná.');
+            flash('Smazáno zařízení: ' . delete_devices($students) . '. Vrátit je jde na stránce Smazaná.');
             flash_kept($others);
             redirect('?p=zarizeni');
         }
@@ -90,7 +90,7 @@ try {
                 flash("Smazáno zařízení: $n. Vrátit ho jde na stránce Smazaná.");
             } else {
                 [$students, $others] = split_student_devices($macs);
-                flash('Smazáno zařízení žáků: ' . delete_devices($students) . '. Vrátit je jde na stránce Smazaná.');
+                flash('Smazáno zařízení: ' . delete_devices($students) . '. Vrátit je jde na stránce Smazaná.');
                 flash_kept($others);
             }
             if (($_POST['zpet'] ?? '') === 'udrzba') {
@@ -189,12 +189,16 @@ try {
         }
         echo '</table></div><p class="row"><button class="danger" name="delete" value="1" onclick="return confirm(\'Opravdu smazat vybraná zařízení?\')">Smazat vybrané</button>';
         if ($f['active'] && $found > 0) {
-            $st = db()->prepare("SELECT COUNT(*) $from AND LOWER(i.poznamka) LIKE ?");
-            $st->execute(array_merge($args, ['%' . addcslashes(student_domain(), '%_\\')]));
-            $stud = (int)$st->fetchColumn();
+            $stud = $found; // bez nastavene domeny zaku jsou hromadne smazatelna vsechna
+            if (student_domain() !== '') {
+                $st = db()->prepare("SELECT COUNT(*) $from AND LOWER(i.poznamka) LIKE ?");
+                $st->execute(array_merge($args, ['%' . addcslashes(student_domain(), '%_\\')]));
+                $stud = (int)$st->fetchColumn();
+            }
             if ($stud > 0) {
-                echo '<button class="danger" name="delete_all" value="1" onclick="return confirm(\'Opravdu smazat ' . $stud . ' nalezených zařízení žáků?\')">'
-                    . 'Smazat ' . $stud . ' nalezených zařízení žáků</button>';
+                $what = student_domain() === '' ? 'nalezených zařízení' : 'nalezených zařízení žáků';
+                echo '<button class="danger" name="delete_all" value="1" onclick="return confirm(\'Opravdu smazat ' . $stud . ' ' . $what . '?\')">'
+                    . 'Smazat ' . $stud . ' ' . $what . '</button>';
             }
             if ($found > $stud) {
                 echo '<span class="mut">Bez žákovského e-mailu (' . h(student_domain()) . '): ' . ($found - $stud) . ' – hromadně se nesmažou.</span>';
@@ -357,8 +361,8 @@ try {
             . '<label>Za posledních dní<input name="d" type="number" min="1" max="90" value="' . $daysAsked . '" size="4"></label>'
             . '<label><span><input type="checkbox" name="u" value="1"' . ($onlyUnknown ? ' checked' : '') . '> jen nepovolená</span></label>'
             . '<button>Zobrazit</button></form>';
-        echo '<p class="mut">Zařízení, která se zkoušela připojit k síti GFP a server je odmítl. '
-            . 'Adresy označené „náhodná“ jsou soukromé adresy telefonů – žák musí pro síť GFP soukromou adresu vypnout, jinak se adresa časem změní. '
+        echo '<p class="mut">Zařízení, která se zkoušela připojit k síti ' . h(wifi_name()) . ' a server je odmítl. '
+            . 'Adresy označené „náhodná“ jsou soukromé adresy telefonů – žák musí pro tuto síť soukromou adresu vypnout, jinak se adresa časem změní. '
             . '<a href="?p=napoveda#zamitnuta">Co znamená stav „už povoleno“?</a></p>';
 
         if ($shortHistory) {
@@ -429,7 +433,7 @@ try {
         if ($post && isset($_POST['export'])) {
             $rows = export_rows();
             header('Content-Type: text/csv; charset=utf-8');
-            header('Content-Disposition: attachment; filename="mac-gfp-' . date('Y-m-d') . '.csv"');
+            header('Content-Disposition: attachment; filename="mac-' . date('Y-m-d') . '.csv"');
             write_csv(fopen('php://output', 'w'), $rows);
             exit;
         }
@@ -476,7 +480,7 @@ try {
                     flash('Neplatná MAC (řádek: hodnota): ' . implode(' | ', array_slice($s['bad'], 0, 40)), 'err');
                 }
                 if ($s['random']) {
-                    flash('Nově přidané náhodné (soukromé) adresy – žák by měl soukromou adresu pro GFP vypnout: '
+                    flash('Nově přidané náhodné (soukromé) adresy – žák by měl soukromou adresu pro ' . wifi_name() . ' vypnout: '
                         . implode(', ', array_slice($s['random'], 0, 40)), 'err');
                 }
             } catch (RuntimeException $e) {
@@ -604,6 +608,10 @@ try {
             echo '<tr><th>' . h($k) . '</th><td>' . h((string)$v) . '</td></tr>';
         }
         echo '</table></div>';
+        if ($missing = missing_config_keys()) {
+            echo '<div class="flash err">V <code>config.php</code> chybí nastavení: ' . h(implode(', ', $missing))
+                . '. Platí pro ně výchozí hodnoty – popis a příklady jsou v <code>config.sample.php</code>.</div>';
+        }
         $imp = state_get('import');
         $zal = state_get('zaloha');
         echo '<div class="card"><h2>Automatické úlohy</h2><table>';
@@ -682,6 +690,17 @@ try {
         $rejDays = (int)cfg('rejected_days');
         $forms = (string)cfg('forms_url') !== '' ? 'nastavený' : 'nenastavený (import jen ručně)';
         $alert = trim((string)cfg('alert_email')) !== '' ? h((string)cfg('alert_email')) : 'nenastaveno';
+        $wifi = h(wifi_name());
+        $domain = student_domain();
+        $domainText = $domain === ''
+            ? 'maže všechna nalezená zařízení – v <code>config.php</code> není nastavená doména e-mailu žáků (<code>student_email_domain</code>), která by ho omezila jen na zařízení žáků.'
+            : 'maže jen zařízení žáků – s e-mailem končícím <code>' . h($domain) . '</code> (nastavení <code>student_email_domain</code>). Ostatní (učitelé, technika, zařízení bez e-mailu) jen vypíše a nechá; smazat je jde jednotlivě přes <em>upravit → Smazat zařízení</em>, kde se aplikace ještě zeptá.';
+        $tridaText = (string)cfg('trida_regex') !== ''
+            ? 'Import ji odvodí ze školního e-mailu žáka podle nastavení <code>trida_regex</code> (např. rok nástupu a písmeno <code>2026.g</code>).'
+            : 'Import ji bere ze sloupce s třídou; odvozování z e-mailu žáka jde zapnout v <code>config.php</code> (<code>trida_regex</code>).';
+        $host = preg_replace('/:\d+$/', '', (string)($_SERVER['HTTP_HOST'] ?? 'IP-SERVERU'));
+        $san = h(filter_var($host, FILTER_VALIDATE_IP) ? "IP:$host" : "DNS:$host");
+        $host = h($host);
         page_header('Nápověda', 'napoveda');
         echo <<<HTML
 <div class="card help">
@@ -701,11 +720,11 @@ try {
 
 <div class="card help" id="princip">
 <h2>Jak to funguje</h2>
-<p>Žákovská wifi GFP (UniFi, UDM) se při každém připojení zařízení zeptá RADIUS serveru (FreeRADIUS na tomto serveru), jestli MAC adresu pustit.
+<p>Při každém připojení zařízení k síti {$wifi} se wifi řadič zeptá RADIUS serveru (FreeRADIUS na tomto serveru), jestli MAC adresu pustit.
 FreeRADIUS se podívá do tabulky povolených adres (<code>radcheck</code>): je-li tam, odpoví „povoleno“, jinak „zamítnuto“. Každý pokus zapíše do historie přihlášení (<code>radpostauth</code>).</p>
 <p>Tahle aplikace jen upravuje seznam povolených adres a ukazuje historii. Jméno, třída a poznámka k adrese jsou zvlášť a FreeRADIUS je nepotřebuje.
 Změna v seznamu platí hned pro další připojení – nic se nerestartuje.</p>
-<p>V UDM: Nastavení → Sítě → Radius servery → <em>Freeradius Linux</em> (IP tohoto serveru, port 1812). Účtovací servery nejsou potřeba.</p>
+<p>Ve wifi řadiči (např. UniFi: Nastavení → Sítě → RADIUS servery) je jako RADIUS server nastavená IP tohoto serveru, port 1812, se sdíleným heslem z <code>/etc/raddb/clients.conf</code>. Účtovací servery nejsou potřeba.</p>
 </div>
 
 <div class="card help" id="zarizeni">
@@ -713,14 +732,14 @@ Změna v seznamu platí hned pro další připojení – nic se nerestartuje.</p
 <ul>
 <li><strong>Třídění</strong> – kliknutím na záhlaví sloupce (MAC, Jméno, Třída, Poznámka, Přidáno, Naposledy), dalším kliknutím obráceně. Třídění podle <em>Naposledy</em> vzestupně dá nahoru zařízení, která se nepřipojila nejdéle (nebo vůbec).</li>
 <li><strong>Hledat</strong> – podle části MAC (v libovolném zápisu, např. <code>b7:32</code> nebo <code>0b9a05</code>), jména nebo poznámky (e-mailu).</li>
-<li><strong>Třída</strong> – rok nástupu a písmeno, např. <code>2026.g</code>. Import ji bere ze školního e-mailu žáka (<code>2026.g.prijmeni@stu.gfp.cz</code>). <strong>Písmeno třídy</strong> vybere všechny ročníky s daným písmenem.</li>
+<li><strong>Třída</strong> – {$tridaText} <strong>Písmeno třídy</strong> se ukáže u tříd ve tvaru rok nástupu a písmeno (<code>2026.g</code>) a vybere všechny ročníky s daným písmenem.</li>
 <li><strong>Naposledy</strong> – poslední úspěšné připojení k wifi. Historie se uchovává {$keepDays} dní, „–“ znamená, že se zařízení za tu dobu nepřipojilo.</li>
 <li><strong>Nepřihlášeno aspoň (dní)</strong> – zařízení, která se tak dlouho nepřipojila. Hodí se na úklid: vyfiltrovat, zaškrtnout vše v hlavičce tabulky, <em>Smazat vybrané</em>. Dokud historie nepokrývá zvolený počet dní, ukáže se červené upozornění, že výsledek není spolehlivý.</li>
 <li><strong>Zařízení na e-mail aspoň</strong> – žáci s více zařízeními (např. 3 a víc): kdo si několikrát vyměnil telefon, nebo sdílí účet. Stará zařízení poznáte podle sloupce <em>Naposledy</em>.</li>
 <li><strong>Smazaná zařízení si aplikace pamatuje</strong> a import z Forms je znovu nepřidá, i když jsou pořád v Excelu. Vrátit je jde na stránce <a href="#smazana">Smazaná</a>.</li>
 <li><strong>upravit</strong> – úprava údajů; dole je i posledních 20 pokusů o připojení (povoleno / zamítnuto), hodí se, když žák tvrdí, že mu wifi nejde.</li>
 <li>Zaškrtnutí všech v hlavičce platí jen pro aktuální stránku (max. 500 zařízení). Když je zadaný nějaký filtr, tlačítko <strong>Smazat N nalezených zařízení žáků</strong> smaže všechna nalezená žákovská zařízení i přes víc stránek.</li>
-<li><strong>Hromadné mazání maže jen zařízení žáků</strong> – s e-mailem končícím <code>@stu.gfp.cz</code> (nastavení <code>student_email_domain</code>). Ostatní (učitelé, technika, zařízení bez e-mailu) jen vypíše a nechá; smazat je jde jednotlivě přes <em>upravit → Smazat zařízení</em>, kde se aplikace ještě zeptá.
+<li><strong>Hromadné mazání</strong> – {$domainText}
 Noční údržba zařízení nemaže vůbec – jen historii přihlášení starší než 90 dní.</li>
 <li><strong>Ročník po maturitě</strong> – vyberte třídu (např. <code>2022.a</code>), <em>Filtrovat</em> a <em>Smazat N nalezených zařízení žáků</em>.</li>
 </ul>
@@ -735,12 +754,12 @@ Tabulku zařízení jde třídit klikem na záhlaví; <em>Dní</em> je počet r�
 <p>Zařízení, která se za posledních {$rejDays} dní (lze změnit) zkusila připojit a server je odmítl. Odkazem <em>povolit…</em> zařízení rovnou přidáte.
 Žák, kterému wifi nejde, tu typicky najde svou adresu – porovnejte ji s tou, kterou zadal do formuláře.</p>
 <p><strong>Stav „už povoleno“</strong> znamená: zařízení <em>je</em> v seznamu povolených, a přesto bylo odmítnuto. Aplikace adresu převede na standardní zápis
-<code>AA:BB:CC:DD:EE:FF</code>, ale FreeRADIUS hledá přesně to, co poslalo UDM – na velikosti písmen nezáleží, na oddělovačích ano
+<code>AA:BB:CC:DD:EE:FF</code>, ale FreeRADIUS hledá přesně to, co poslal wifi řadič – na velikosti písmen nezáleží, na oddělovačích ano
 (<code>d80b9a05b732</code> nebo <code>D8-0B-…</code> v databázi nenajde).</p>
 <ul>
 <li><strong>Kliknutím na „už povoleno“</strong> otevřete zařízení s historií posledních pokusů: když po přidání už přibývá jen „povoleno“, je vše v pořádku.</li>
 <li><strong>Pár takových řádků je normální</strong> – historie ukazuje i pokusy z doby, než jste zařízení povolili. Poslední pokus (sloupec <em>Naposledy</em>) je pak starší než chvíle povolení a nové už nepřibývají.</li>
-<li><strong>Hodně řádků „už povoleno“ s čerstvými časy</strong> a na Údržbě stojící „Povoleno za 24 h“ znamená, že UDM posílá MAC v jiném zápisu, než je v databázi – nepřipojí se nikdo. Podívejte se do sloupce MAC, v jakém zápisu adresy chodí, a v UDM dočasně vraťte původní RADIUS server.</li>
+<li><strong>Hodně řádků „už povoleno“ s čerstvými časy</strong> a na Údržbě stojící „Povoleno za 24 h“ znamená, že wifi řadič posílá MAC v jiném zápisu, než je v databázi – nepřipojí se nikdo. Podívejte se do sloupce MAC, v jakém zápisu adresy chodí, a ve wifi řadiči dočasně vraťte původní RADIUS server.</li>
 </ul>
 </div>
 
@@ -757,7 +776,7 @@ Tabulku zařízení jde třídit klikem na záhlaví; <em>Dní</em> je počet r�
 (druhý znak adresy je 2, 6, A nebo E). Pro danou síť ji iPhone i Android obvykle drží stále stejnou, takže zařízení normálně funguje –
 <strong>hromadně je nemažte</strong>. Adresa se ale změní po resetu nastavení sítě, po „zapomenutí“ sítě nebo když je soukromá adresa nastavená jako střídavá;
 pak se žák nepřipojí a stará adresa zůstane v seznamu zbytečně.</p>
-<p>Žák má proto pro síť GFP soukromou adresu vypnout (iPhone: Nastavení → Wi-Fi → ⓘ u sítě → Soukromá adresa Wi-Fi → Vypnuto; Android: Wi-Fi → síť → Ochrana soukromí → MAC adresa zařízení / telefonu).
+<p>Žák má proto pro síť {$wifi} soukromou adresu vypnout (iPhone: Nastavení → Wi-Fi → ⓘ u sítě → Soukromá adresa Wi-Fi → Vypnuto; Android: Wi-Fi → síť → Ochrana soukromí → MAC adresa zařízení / telefonu).
 Zbytečné adresy uklidíte filtrem <em>Nepřihlášeno aspoň … dní</em> (případně s <em>jen náhodné</em>).</p>
 <p>Adresa <code>02:00:00:00:00:00</code> je zástupná hodnota, kterou Android ukazuje aplikacím místo skutečné adresy – žádné zařízení ji na wifi nepoužívá, smažte ji.</p>
 </div>
@@ -769,7 +788,7 @@ Zbytečné adresy uklidíte filtrem <em>Nepřihlášeno aspoň … dní</em> (p�
 Přidají se jen nové adresy, u existujících se doplní jen prázdné údaje, nic se nepřepisuje. Písmeno O v adrese se bere jako nula.</li>
 <li><strong>Import z OneDrive</strong> (odkaz je {$forms}) – Excel s odpověďmi sdílený jako „Kdokoli s odkazem“, odkaz je v <code>config.php</code> (<code>forms_url</code>).
 Server ho načítá sám každých 10 minut; tlačítkem <em>Načíst z OneDrive</em> hned.</li>
-<li><strong>Odkud se registrace berou</strong> – odpovědi z Forms zapisuje tok v Power Automate do Excelu <code>wifi-registrace-tok.xlsx</code> a macadmin si ho stahuje. Podrobně v oddílu <a href="#powerautomate">Power Automate</a>.</li>
+<li><strong>Odkud se registrace berou</strong> – odpovědi z Forms zapisuje tok v Power Automate do Excelu (zde <code>wifi-registrace-tok.xlsx</code>) a macadmin si ho stahuje. Podrobně v oddílu <a href="#powerautomate">Power Automate</a>.</li>
 <li><strong>Upozornění e-mailem</strong> na {$alert} – když automatický import selže (OneDrive nedostupný, zrušené sdílení…): hned při první chybě, pak nejvýš jednou za 6 hodin a jednou po obnovení.</li>
 <li><strong>Výsledek importu</strong>: <em>Přidáno</em> – nové adresy; <em>Přeskočeno</em> – dříve smazaná zařízení; <em>Neplatná MAC</em> – odpovědi, které nejsou adresa (překlepy, IP adresa, text) – nic se z nich nepřidá; <em>Nově přidané náhodné</em> – viz <a href="#nahodne">náhodné adresy</a>.</li>
 <li><strong>CSV nebo vložený text</strong> – sloupce se záhlavím, nebo bez záhlaví v pořadí MAC; jméno; třída; poznámka.</li>
@@ -785,8 +804,8 @@ macadmin soubor jen stahuje, takže by nové registrace neviděl. Proto každou 
 
 <h3>Nastavení toku</h3>
 <table>
-<tr><th>Tok</th><td><em>MAC adresy z Form do souboru pro MAC Admin</em> (make.powerautomate.com → Moje toky), vlastník <code>vais@gfp.cz</code></td></tr>
-<tr><th>1. Spouštěč</th><td><em>Microsoft Forms – Když se odešle nová odpověď</em> → formulář <em>WiFi GFP Neratovice – registrace zařízení</em></td></tr>
+<tr><th>Tok</th><td>např. <em>MAC adresy z Forms do souboru pro macadmin</em> (make.powerautomate.com → Moje toky); vlastníkem je účet, pod kterým tok vznikl a který vlastní formulář</td></tr>
+<tr><th>1. Spouštěč</th><td><em>Microsoft Forms – Když se odešle nová odpověď</em> → registrační formulář</td></tr>
 <tr><th>2.</th><td><em>Microsoft Forms – Získat podrobnosti o odpovědi</em> → stejný formulář, ID odpovědi = <em>ID odpovědi</em> ze spouštěče</td></tr>
 <tr><th>3.</th><td><em>Office 365 Users – Získat profil uživatele (V2)</em> → Uživatel (UPN) = <em>Responders' Email</em></td></tr>
 <tr><th>4.</th><td><em>Excel Online (Business) – Přidá řádek do tabulky</em> → OneDrive for Business, soubor <code>wifi-registrace-tok.xlsx</code> (kořen OneDrive), <em>Tabulka1</em>:
@@ -797,7 +816,7 @@ MAC 1 = otázka „…nového zařízení…“, MAC 2 = otázka „…druhého 
 
 <h3>Co ho může rozbít</h3>
 <ul>
-<li><strong>Změna hesla nebo vypršelé přihlášení</strong> účtu <code>vais@gfp.cz</code> → tok selže; v Power Automate u toku <em>Opravit připojení</em> (znovu se přihlásit).</li>
+<li><strong>Změna hesla nebo vypršelé přihlášení</strong> účtu vlastníka toku → tok selže; v Power Automate u toku <em>Opravit připojení</em> (znovu se přihlásit).</li>
 <li><strong>Přejmenovaný nebo přesunutý Excel</strong>, přejmenovaná záhlaví sloupců nebo tabulka → tok selže nebo zapíše prázdné hodnoty. Soubor, záhlaví ani tabulku neměnit.</li>
 <li><strong>Otázka s MAC smazaná a vytvořená znovu</strong> ve formuláři → tok ji nenajde a MAC zůstane prázdná; v kroku 4 ji znovu namapovat. Úprava textu otázky nevadí.</li>
 <li><strong>90 dní bez spuštění</strong> (např. prázdniny bez registrací) → Microsoft může tok vypnout (předem pošle e-mail); stačí ho znovu <em>Zapnout</em>. <strong>Na začátku školního roku zkontrolovat, že tok není vypnutý.</strong></li>
@@ -841,9 +860,9 @@ Obnova: soubor stáhnout přes SFTP a nahrát v <em>Import / export</em> (přida
 <h2>Když něco nefunguje</h2>
 <ul>
 <li><strong>Nepřipojí se nikdo</strong> – Údržba: roste „Povoleno za 24 h“? Na serveru <code>systemctl status radiusd</code> a <code>tail -f /var/log/radius/radius.log</code>.
-Rychlý návrat: v UDM změnit IP RADIUS serveru zpět na starý server. Podrobný výpis: <code>systemctl stop radiusd; radiusd -X</code> (Ctrl+C a <code>systemctl start radiusd</code>).</li>
+Rychlý návrat: ve wifi řadiči vrátit IP RADIUS serveru na předchozí server. Podrobný výpis: <code>systemctl stop radiusd; radiusd -X</code> (Ctrl+C a <code>systemctl start radiusd</code>).</li>
 <li><strong>Nepřipojí se jeden žák</strong> – je-li v seznamu, otevřete <em>upravit</em> a podívejte se na poslední pokusy o připojení. Jinak ho najděte v <a href="?p=zamitnuta">Zamítnutých</a>. Adresa tam je, ale v seznamu ne → zadal do formuláře jinou (často náhodnou) adresu nebo se překlepl; povolte ji odkazem <em>povolit…</em>.
-Adresa tam není → zařízení se k síti GFP vůbec nepřipojuje (špatná síť, heslo wifi).</li>
+Adresa tam není → zařízení se k síti {$wifi} vůbec nepřipojuje (špatná síť, heslo wifi).</li>
 <li><strong>Přišel e-mail, že import selhal</strong> – nejčastěji zrušené sdílení souboru na OneDrive nebo změněný odkaz; zkontrolujte <code>forms_url</code> a zkuste <em>Načíst z OneDrive</em>, chyba se ukáže.</li>
 <li><strong>Log hlásí BlastRADIUS / require_message_authenticator</strong> – jen doporučení; v <code>/etc/raddb/clients.conf</code> doplnit k danému klientovi <code>require_message_authenticator = yes</code> a restartovat radiusd.</li>
 </ul>
@@ -852,10 +871,10 @@ Adresa tam není → zařízení se k síti GFP vůbec nepřipojuje (špatná s�
 <div class="card help" id="certifikat">
 <h2>Certifikát a uložení hesla v Chrome</h2>
 <p>Chrome nenabízí uložení hesla na stránkách s neplatným certifikátem (u adresy „Nezabezpečeno“). Aplikace má vlastní certifikát pro adresu
-<code>192.168.0.1</code>; aby ho počítač bral jako platný, je potřeba ho jednou přidat mezi důvěryhodné.</p>
+<code>{$host}</code>; aby ho počítač bral jako platný, je potřeba ho jednou přidat mezi důvěryhodné.</p>
 <p><strong>Na serveru</strong> (jen pokud certifikát ještě není – <code>ls /etc/pki/tls/certs/macadmin.crt</code>):</p>
 <pre>openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-  -subj "/CN=192.168.0.1" -addext "subjectAltName=IP:192.168.0.1" \
+  -subj "/CN={$host}" -addext "subjectAltName={$san}" \
   -keyout /etc/pki/tls/private/macadmin.key -out /etc/pki/tls/certs/macadmin.crt
 chmod 600 /etc/pki/tls/private/macadmin.key
 restorecon /etc/pki/tls/private/macadmin.key /etc/pki/tls/certs/macadmin.crt
@@ -872,7 +891,7 @@ apachectl configtest &amp;&amp; systemctl reload httpd</pre>
 <li>Přes SFTP (Bitvise) stáhnout <code>/etc/pki/tls/certs/macadmin.crt</code>.</li>
 <li>Dvakrát kliknout → <em>Nainstalovat certifikát</em> → <em>Aktuální uživatel</em> → <em>Všechny certifikáty umístit do následujícího úložiště</em> →
 <em>Důvěryhodné kořenové certifikační autority</em> → Dokončit a potvrdit.</li>
-<li>Zavřít všechna okna Chrome a znovu otevřít <code>https://192.168.0.1/macadmin/</code> – u adresy je zámek a po přihlášení Chrome nabídne uložení hesla.</li>
+<li>Zavřít všechna okna Chrome a znovu otevřít <code>https://{$host}/macadmin/</code> – u adresy je zámek a po přihlášení Chrome nabídne uložení hesla.</li>
 </ol>
 <p>Certifikát platí 10 let. Na jiném počítači stačí zopakovat krok na počítači. Bez certifikátu jde heslo uložit ručně v <code>chrome://password-manager/passwords</code> → <em>Přidat</em>.</p>
 </div>
@@ -886,7 +905,7 @@ apachectl configtest &amp;&amp; systemctl reload httpd</pre>
 <tr><th>Cron</th><td><code>/etc/cron.d/macadmin</code> (promazání historie a záloha ve 2:15), <code>/etc/cron.d/macadmin-import</code> (import každých 10 min)</td></tr>
 <tr><th>Zálohy seznamu</th><td><code>/var/lib/macadmin/zalohy/</code> (CSV, každou noc, 30 dní)</td></tr>
 <tr><th>Logy</th><td><code>/var/log/macadmin-import.log</code>, <code>/var/log/macadmin-udrzba.log</code>, <code>/var/log/radius/radius.log</code></td></tr>
-<tr><th>FreeRADIUS</th><td><code>/etc/raddb/clients.conf</code> (UDM/AP a sdílené heslo), <code>/etc/raddb/mods-available/sql</code> (databáze); kontrola <code>radiusd -XC</code></td></tr>
+<tr><th>FreeRADIUS</th><td><code>/etc/raddb/clients.conf</code> (wifi řadič / AP a sdílené heslo), <code>/etc/raddb/mods-available/sql</code> (databáze); kontrola <code>radiusd -XC</code></td></tr>
 <tr><th>Test ověření</th><td><code>radtest AA:BB:CC:DD:EE:FF AA:BB:CC:DD:EE:FF 127.0.0.1 0 testing123</code> → Access-Accept / Access-Reject</td></tr>
 <tr><th>Zkušební e-mail</th><td><code>sudo -u apache php /var/www/macadmin/import-forms.php --test-mail</code></td></tr>
 </table>

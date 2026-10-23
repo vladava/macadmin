@@ -12,7 +12,7 @@
 # config.php se nikdy neprepisuje. Pred kazdou aktualizaci se web zazalohuje do /root/macadmin-zalohy.
 set -euo pipefail
 
-REPO=vladava/macadmin
+REPO=${MACADMIN_REPO:-vladava/macadmin}   # vlastni fork: MACADMIN_REPO=uzivatel/repozitar macadmin-update
 WEB=/var/www/macadmin
 APACHE_CONF=/etc/httpd/conf.d/macadmin.conf
 STATE=/var/lib/macadmin-update

@@ -1,71 +1,50 @@
-# Přesun RADIUS na AlmaLinux 9 + správa MAC adres (macadmin)
+# macadmin – správa MAC adres pro FreeRADIUS
 
-Náhrada za daloRADIUS: jednoduché webové rozhraní pro povolené MAC adresy žákovské wifi GFP.
+Jednoduché webové rozhraní (PHP 8, bez frameworku) pro wifi, která ověřuje zařízení podle MAC adresy přes FreeRADIUS
+(RADIUS MAC autentizace, např. UniFi). Náhrada za daloRADIUS pro školy a podobné sítě, kde se zařízení registrují
+přes formulář (MS Forms) a správce potřebuje jen seznam povolených adres.
 
-Obsah balíčku:
+**Funkce**
+
+- seznam povolených zařízení: hledání (i podle části MAC v libovolném zápisu), filtry podle třídy, náhodných adres,
+  zařízení dlouho nepřipojených nebo počtu zařízení na e-mail, třídění podle sloupců, sloupec „naposledy připojeno“
+- přidání / úprava / smazání, u zařízení historie posledních pokusů o připojení
+- zamítnutá zařízení se statistikou po dnech a odkazem „povolit…“
+- import Excelu z MS Forms (.xlsx), CSV nebo vloženého textu – najde sloupce s MAC sám, přidá jen nové adresy, nic nepřepisuje;
+  rozpozná i divně zapsané adresy (malá písmena, `-` `.` mezery, vynechané nuly, O místo 0, I/l místo 1, adresu uprostřed věty)
+- automatický import z Excelu na OneDrive každých 10 minut a upozornění e-mailem, když selže
+- smazaná zařízení si pamatuje (import je znovu nepřidá) a umí je obnovit; hromadné mazání lze omezit jen na zařízení žáků
+- noční promazání historie přihlášení a záloha seznamu, stav úloh a historie importů na stránce Údržba
+- nápověda pro správce přímo v aplikaci
+
+**Požadavky:** Linux (testováno na AlmaLinux 9 se SELinuxem), FreeRADIUS 3 s modulem `sql` nad MariaDB/MySQL, Apache, PHP 8 s rozšířeními `pdo_mysql`, `mbstring`, `xml`, `zip`, `curl`.
 
 | Soubor | K čemu |
 |---|---|
 | `index.php`, `lib.php` | webové rozhraní |
-| `config.sample.php` | vzor konfigurace → zkopírovat jako `config.php` |
-| `setup.sql` | tabulka `mac_info`, indexy, databázový uživatel `macadmin` |
-| `udrzba.php` | denní promazání historie přihlášení (cron) |
+| `config.sample.php` | vzor konfigurace → zkopírovat jako `config.php` (necommituje se) |
+| `setup.sql` | vlastní tabulky aplikace, indexy, databázový uživatel `macadmin` |
+| `udrzba.php` | denní údržba z cronu: promazání historie přihlášení, záloha seznamu |
+| `import-forms.php` | automatický import z OneDrive z cronu |
 | `macadmin.conf` | konfigurace Apache |
-
-Funkce rozhraní: seznam zařízení s hledáním a filtrem podle třídy, přidání / úprava / smazání (MAC lze zadat v libovolném zápisu), zamítnutá zařízení s odkazem „povolit…“ a označením náhodných adres, import celého Excelu z MS Forms (.xlsx), CSV nebo vloženého textu (přidá jen nové MAC, nic nepřepisuje), export CSV, smazání celé třídy, údržba (statistiky, promazání `radpostauth`, oprava nestandardního zápisu MAC).
+| `update.sh` | aktualizace na serveru z GitHubu |
 
 ---
 
-## 1. Zjistit na STARÉM serveru (192.168.0.100)
+## 1. FreeRADIUS a databáze
 
 ```
-mysql -u radius -p radius -e "SHOW TABLES; SELECT attribute, op, value, COUNT(*) FROM radcheck GROUP BY 1,2,3; SELECT COUNT(*) FROM nas;"
-```
-
-- Hodnoty `attribute / op / value` musí odpovídat nastavení `radcheck_*` v `config.php` (výchozí `Auth-Type := Accept`).
-- Pokud je tabulka `nas` prázdná, AP se berou z `clients.conf`.
-
-Export dat (jen potřebné tabulky, bez 19 mil. řádků historie):
-
-```
-mysqldump -u radius -p --no-create-info --complete-insert radius radcheck radreply radgroupcheck radgroupreply radusergroup nas > radius-data.sql
-```
-
-Jména z daloRADIUS (pokud tabulka `userinfo` existuje) jako CSV pro pozdější import – jen k MAC, které jsou v `radcheck` (v `userinfo` zůstávají i smazaná zařízení a import by je znovu povolil):
-
-```
-mysql -u radius -p radius -B -N -e "SELECT u.username, TRIM(CONCAT(IFNULL(u.firstname,''),' ',IFNULL(u.lastname,''))), IFNULL(u.department,''), REPLACE(IFNULL(u.notes,''),';',',') FROM userinfo u JOIN radcheck r ON r.username = u.username AND r.attribute = 'Auth-Type'" | sed 's/\t/;/g' > jmena.csv
-```
-
-Zkopírujte si také `/etc/raddb/clients.conf` (obsahuje sdílené heslo pro AP).
-
-Oba soubory a `clients.conf` přeneste na nový server (např. přes Bitvise SFTP).
-
-## 2. NOVÝ server – instalace
-
-```
-dnf install -y freeradius freeradius-mysql freeradius-utils mariadb-server httpd mod_ssl php php-mysqlnd php-mbstring php-xml php-pecl-zip
+dnf install -y freeradius freeradius-mysql freeradius-utils mariadb-server
 systemctl enable --now mariadb
 mysql_secure_installation
-```
 
-Databáze s čerstvým schématem FreeRADIUS 3.0.27 a import dat:
-
-```
-mysql -u root -p -e "CREATE DATABASE radius CHARACTER SET utf8mb4; CREATE USER 'radius'@'localhost' IDENTIFIED BY 'HESLO_RADIUS'; GRANT ALL ON radius.* TO 'radius'@'localhost'; FLUSH PRIVILEGES;"
+mysql -u root -p -e "CREATE DATABASE radius CHARACTER SET utf8mb4;
+  CREATE USER 'radius'@'localhost' IDENTIFIED BY 'HESLO_RADIUS';
+  GRANT ALL ON radius.* TO 'radius'@'localhost';"
 mysql -u root -p radius < /etc/raddb/mods-config/sql/main/mysql/schema.sql
-mysql -u root -p radius < radius-data.sql
 ```
 
-## 3. NOVÝ server – FreeRADIUS
-
-Zapnout modul SQL:
-
-```
-ln -s /etc/raddb/mods-available/sql /etc/raddb/mods-enabled/sql
-```
-
-V `/etc/raddb/mods-available/sql` nastavit:
+Modul SQL: `ln -s ../mods-available/sql /etc/raddb/mods-enabled/sql` a v `/etc/raddb/mods-available/sql` nastavit
 
 ```
 dialect = "mysql"
@@ -78,25 +57,22 @@ radius_db = "radius"
 read_clients = yes
 ```
 
-a ve stejném souboru **zakomentovat celý blok `tls { ... }`** uvnitř sekce `mysql { }` – jinak modul hledá neexistující certifikáty a FreeRADIUS nenastartuje.
+a ve stejném souboru **zakomentovat celý blok `tls { ... }`** uvnitř `mysql { }` (jinak modul hledá certifikáty a FreeRADIUS nenastartuje).
 
-Klienti (AP): přeneste z `clients.conf` starého serveru bloky pro `192.168.0.0/16` a `172.17.0.0/16` se stejným `secret`. Každý blok musí mít **jiné jméno** (na starém serveru oba měly `private-network-1`):
+Klienti (wifi řadič / AP) v `/etc/raddb/clients.conf` – každý blok s jiným jménem, silné sdílené heslo (stejné jako ve wifi řadiči):
 
 ```
-client skolni-sit {
+client wifi {
 	ipaddr = 192.168.0.0/16
-	secret = STEJNE_HESLO_JAKO_NA_STAREM
-}
-client wifi-site {
-	ipaddr = 172.17.0.0/16
-	secret = STEJNE_HESLO_JAKO_NA_STAREM
+	secret = SILNE_SDILENE_HESLO
+	require_message_authenticator = yes
 }
 ```
 
-Výchozí `sites-enabled/default` už `-sql` v sekcích authorize a post-auth obsahuje, není potřeba nic měnit.
-Pro kontrolu porovnejte se starým serverem: `diff` starého a nového `sites-enabled/default`.
+Výchozí `sites-enabled/default` už `-sql` v sekcích authorize a post-auth obsahuje. Povolená MAC se zapisuje do `radcheck`
+jako `username = AA:BB:CC:DD:EE:FF`, `Auth-Type := Accept` (lze změnit v `config.php`).
 
-Certifikát pro modul EAP (AlmaLinux 9 ho po instalaci nemá a bez něj FreeRADIUS nenastartuje, i když se EAP pro MAC nepoužívá):
+Certifikát pro modul EAP (bez něj FreeRADIUS nenastartuje, i když se EAP pro MAC nepoužívá):
 
 ```
 cd /etc/raddb/certs && ./bootstrap
@@ -104,106 +80,97 @@ chown root:radiusd /etc/raddb/certs/* && chmod 640 /etc/raddb/certs/* && chmod 7
 restorecon -R /etc/raddb/certs
 ```
 
-Kontrola konfigurace, firewall, spuštění (má-li server i veřejnou IP, povolte RADIUS ve firewallu jen ze školních sítí přes `--add-rich-rule`):
+Kontrola a spuštění (má-li server veřejnou IP, povolte RADIUS ve firewallu jen z vnitřních sítí přes `--add-rich-rule`):
 
 ```
 radiusd -XC
-firewall-cmd --permanent --add-service=radius
-firewall-cmd --reload
+firewall-cmd --permanent --add-service=radius && firewall-cmd --reload
 systemctl enable --now radiusd
+radtest AA:BB:CC:DD:EE:FF AA:BB:CC:DD:EE:FF 127.0.0.1 0 testing123   # Access-Accept, je-li MAC povolená
 ```
 
-Test jednou povolenou MAC (z tabulky radcheck):
+Databázi stačí poslouchat jen místně: do `/etc/my.cnf.d/zz-local.cnf` dát `[mysqld]` a `bind-address = 127.0.0.1`.
+
+## 2. Webové rozhraní
 
 ```
-radtest AA:BB:CC:DD:EE:FF AA:BB:CC:DD:EE:FF 127.0.0.1 0 testing123
-```
-
-Očekávaný výsledek: `Received Access-Accept`. Pro neznámou MAC: `Access-Reject`.
-
-## 4. NOVÝ server – webové rozhraní
-
-```
+dnf install -y httpd mod_ssl php php-mysqlnd php-mbstring php-xml php-pecl-zip
 mkdir -p /var/www/macadmin
 cp index.php lib.php config.sample.php udrzba.php import-forms.php /var/www/macadmin/
 cp /var/www/macadmin/config.sample.php /var/www/macadmin/config.php
-cp macadmin.conf /etc/httpd/conf.d/
+cp macadmin.conf /etc/httpd/conf.d/        # upravte Require ip na svou správcovskou síť
+sed 's/ZMENTE_HESLO/heslo-macadmin/' setup.sql | mysql -u root -p radius
 ```
 
-Heslo do databáze pro rozhraní – v `setup.sql` nahraďte `ZMENTE_HESLO` a spusťte:
+Vyplňte `config.php` (viz níže), pak práva, SELinux a služby:
 
 ```
-mysql -u root -p radius < setup.sql
-```
-
-Hash hesla správce:
-
-```
-php -r 'echo password_hash("vase-heslo", PASSWORD_DEFAULT), PHP_EOL;'
-```
-
-Vyplňte `config.php` (heslo k DB a hash), práva a SELinux:
-
-```
-chown root:apache /var/www/macadmin/config.php
-chmod 640 /var/www/macadmin/config.php
-setsebool -P httpd_can_network_connect_db 1
+chown root:apache /var/www/macadmin/config.php && chmod 640 /var/www/macadmin/config.php
+install -d -o apache -g apache -m 750 /var/lib/macadmin
 restorecon -R /var/www/macadmin
 echo 'date.timezone = Europe/Prague' > /etc/php.d/99-macadmin.ini
-firewall-cmd --permanent --add-service=http --add-service=https
-firewall-cmd --reload
+firewall-cmd --permanent --add-service=http --add-service=https && firewall-cmd --reload
 systemctl enable --now php-fpm httpd
 ```
 
-Rozhraní: `https://IP-NOVEHO-SERVERU/macadmin/` (přístup jen z 192.168.0.0/24, viz `macadmin.conf`; HTTP se přesměruje na HTTPS).
+Rozhraní: `https://IP-SERVERU/macadmin/` (HTTP se přesměruje na HTTPS). Jak nastavit vlastní certifikát, aby prohlížeč nehlásil
+„Nezabezpečeno“ a nabízel uložení hesla, je v aplikaci v Nápovědě.
 
-Registrace z MS Forms: v rozhraní **Import / export** nahrajte pokaždé celý stažený Excel z Forms. Sloupce s MAC (i první a druhé zařízení) se najdou podle obsahu, jméno, třída a e-mail podle záhlaví. Přidají se jen nové adresy, dříve smazaná zařízení se znovu nepřidají (povolíte je ručně přes Přidat) a vypíšou se neplatné a náhodné MAC.
+### Nastavení (`config.php`)
 
-Pozor: Excel propojený s Forms (tlačítko „Otevřít v Excelu“) dostává nové odpovědi až ve chvíli, kdy ho někdo otevře – stažením přes odkaz se nesynchronizuje. Pro automatický import proto odpovědi zapisuje tok v Power Automate (Forms – při odeslání nové odpovědi → Forms – získat podrobnosti odpovědi → Office 365 Users – získat profil uživatele → Excel Online (Business) – přidat řádek do tabulky) do obyčejného Excelu se záhlavím `Čas | E-mail | Jméno | MAC 1 | MAC 2`; podrobně v aplikaci v Nápovědě. Sloupce s časem/datem v záhlaví import jako MAC nebere.
+| Volba | Význam |
+|---|---|
+| `app_name`, `wifi_name` | název aplikace v menu a název wifi sítě v textech |
+| `db_dsn`, `db_user`, `db_pass` | připojení k databázi FreeRADIUS (uživatel `macadmin` ze `setup.sql`) |
+| `admin_user`, `admin_pass_hash` | účet správce; hash: `php -r 'echo password_hash("heslo", PASSWORD_DEFAULT), PHP_EOL;'` |
+| `radcheck_attribute`, `radcheck_op`, `radcheck_value` | jak se v `radcheck` zapisuje povolená MAC (výchozí `Auth-Type := Accept`) |
+| `student_email_domain` | doména e-mailu žáků (např. `@zaci.skola.cz`); hromadné mazání pak smaže jen jejich zařízení, prázdné = bez omezení |
+| `trida_regex` | jak z e-mailu žáka odvodit třídu, např. `/^(\d{4}\.[a-z])\./i` pro `2026.g.prijmeni@…` → `2026.g`; prázdné = neodvozovat |
+| `forms_url` | sdílený odkaz na Excel s registracemi na OneDrive (pro automatický import) |
+| `alert_email`, `alert_from` | komu a od koho poslat e-mail, když automatický import selže |
+| `postauth_keep_days`, `rejected_days`, `session_timeout` | historie přihlášení (dní), výchozí období zamítnutých, odhlášení po neaktivitě (s) |
 
-Import přímo z OneDrive: Excel s odpověďmi sdílejte jako „Kdokoli s odkazem“ (stačí zobrazení), odkaz vložte do `forms_url` v `config.php`. V rozhraní pak přibude tlačítko **Načíst z OneDrive**; pro něj musí webový server smět ven na internet:
+Chybějící volby (třeba po aktualizaci) ukáže stránka Údržba.
+
+## 3. Cron
+
+```
+echo '15 2 * * * apache php /var/www/macadmin/udrzba.php >> /var/log/macadmin-udrzba.log 2>&1' > /etc/cron.d/macadmin
+touch /var/log/macadmin-udrzba.log && chown apache /var/log/macadmin-udrzba.log
+```
+
+Noční údržba maže jen historii přihlášení starší než `postauth_keep_days` (povolená zařízení zůstávají) a ukládá zálohu
+seznamu do `/var/lib/macadmin/zalohy` (CSV, 30 dní; obnova nahráním v Import / export). Cron pro import z OneDrive viz níže
+(oba doplní i `macadmin-update`).
+
+## 4. Registrace z MS Forms
+
+Nejjednodušší je v **Import / export** nahrát celý stažený Excel z Forms – kdykoli znovu, přidají se jen nové adresy.
+
+**Automaticky (do 10 minut):** Excel propojený s Forms (tlačítko „Otevřít v Excelu“) dostává nové odpovědi až ve chvíli,
+kdy ho někdo otevře, proto odpovědi zapisuje tok v Power Automate do obyčejného Excelu:
+
+1. V OneDrive nový Excel, v 1. řádku `Čas | E-mail | Jméno | MAC 1 | MAC 2`, označit a *Vložit → Tabulka* (s hlavičkou).
+2. Power Automate → *Automatizovaný tok cloudu*: *Forms – Když se odešle nová odpověď* → *Forms – Získat podrobnosti o odpovědi*
+   → *Office 365 Users – Získat profil uživatele (V2)* (uživatel = e-mail respondenta) → *Excel Online (Business) – Přidá řádek do tabulky*
+   (Čas = datum odeslání, E-mail, Jméno = zobrazované jméno, MAC 1 / MAC 2 = odpovědi s MAC).
+3. Excel sdílet „Kdokoli s odkazem – může zobrazit“, odkaz do `forms_url`.
+4. Povolit webovému serveru přístup ven (tlačítko *Načíst z OneDrive*) a cron:
 
 ```
 setsebool -P httpd_can_network_connect 1
+echo '*/10 * * * * apache php /var/www/macadmin/import-forms.php >> /var/log/macadmin-import.log 2>&1' > /etc/cron.d/macadmin-import
+touch /var/log/macadmin-import.log && chown apache /var/log/macadmin-import.log
 ```
 
-Automatický import každých 10 minut – soubor `/etc/cron.d/macadmin-import`:
+Upozornění e-mailem při selhání importu: vyplnit `alert_email`, nainstalovat a spustit postfix
+(`dnf install -y postfix && systemctl enable --now postfix`) a vyzkoušet
+`sudo -u apache php /var/www/macadmin/import-forms.php --test-mail`. Když e-mail nedorazí, podívejte se do `journalctl -u postfix`
+– pošta může zprávy přímo ze serveru odmítat, pak je potřeba v postfixu nastavit `relayhost`.
 
-```
-*/10 * * * * apache php /var/www/macadmin/import-forms.php >> /var/log/macadmin-import.log 2>&1
-```
+Podrobnosti (co může tok rozbít, jak ho otestovat) jsou v aplikaci v Nápovědě.
 
-a vytvořit log: `touch /var/log/macadmin-import.log && chown apache /var/log/macadmin-import.log`. Do logu se píše jen při přidání zařízení nebo chybě.
-
-Upozornění e-mailem, když automatický import selže: do `config.php` doplnit `'alert_email' => 'vais@gfp.cz',`. E-mail přijde hned při první chybě, při trvající chybě nejvýš jednou za 6 hodin a jednou po obnovení. Posílá se přes místní postfix:
-
-```
-dnf install -y postfix && systemctl enable --now postfix
-sudo -u apache php /var/www/macadmin/import-forms.php --test-mail
-```
-
-Když zkušební e-mail nedorazí (ani do spamu), podívejte se do `journalctl -u postfix` – školní pošta může zprávy přímo ze serveru odmítat, pak je potřeba v postfixu nastavit `relayhost`.
-
-Denní údržba – soubor `/etc/cron.d/macadmin`:
-
-```
-15 2 * * * apache php /var/www/macadmin/udrzba.php >> /var/log/macadmin-udrzba.log 2>&1
-```
-
-Skript zároveň uloží zálohu seznamu povolených zařízení do `/var/lib/macadmin/zalohy` (30 dní); adresář musí patřit uživateli apache: `install -d -o apache -g apache -m 750 /var/lib/macadmin` (dělá i `macadmin-update`).
-
-a vytvořit log: `touch /var/log/macadmin-udrzba.log && chown apache /var/log/macadmin-udrzba.log`
-
-## 5. Přepnutí
-
-1. V UDM: Nastavení → Profily → RADIUS → „Freeradius Linux“ → změnit IP na nový server.
-2. Ověřit, že se žáci připojují (v rozhraní Údržba: „Povoleno za 24 h“ roste).
-3. Návrat: v profilu vrátit IP `192.168.0.100`.
-4. Po pár dnech bez potíží starý server vypnout.
-
-Po instalaci rozhraní spusťte v Údržbě **Opravit zápis** – sjednotí nestandardně zapsané MAC (na starém serveru jich bylo 41). Teprve potom importujte `jmena.csv`, jinak se jména k nestandardně zapsaným MAC nespárují a vzniknou duplicitní záznamy.
-
-## 6. Aktualizace
+## 5. Aktualizace
 
 Jednou nainstalovat skript:
 
@@ -212,13 +179,27 @@ curl -fsSL https://raw.githubusercontent.com/vladava/macadmin/main/update.sh -o 
 chmod 700 /usr/local/sbin/macadmin-update
 ```
 
-Pak při každé aktualizaci stačí jako root spustit `macadmin-update`. Skript:
+Pak při každé aktualizaci jako root `macadmin-update`. Skript zjistí poslední verzi na GitHubu a vypíše změny, zkontroluje
+syntaxi PHP, zazálohuje web do `/root/macadmin-zalohy`, nahraje nové soubory (`config.php` nikdy nepřepisuje), konfiguraci
+Apache aktualizuje jen neupravenou, při změně `setup.sql` upraví databázi (zeptá se na heslo root do MariaDB), doplní cron
+a aktualizuje sám sebe. `--force` nainstaluje znovu i stejnou verzi. Z vlastního forku: `MACADMIN_REPO=uzivatel/repozitar macadmin-update`.
 
-- zjistí poslední verzi na GitHubu a vypíše seznam změn (když je verze aktuální, nic nedělá; `--force` nainstaluje znovu),
-- zkontroluje syntaxi PHP, zazálohuje web do `/root/macadmin-zalohy` (posledních 5) a nahraje nové soubory – `config.php` nikdy nepřepisuje,
-- konfiguraci Apache aktualizuje sám jen tehdy, když nebyla ručně upravená (jinak ukáže rozdíl a zeptá se), před reloadem ji otestuje,
-- při změně `setup.sql` se zeptá na heslo root do MariaDB a upraví databázi,
-- doplní chybějící cron úlohy (promazání historie, import z OneDrive, je-li nastavený `forms_url`),
-- aktualizuje i sám sebe.
+## 6. Přechod z daloRADIUS (volitelné)
 
-Kdyby byl repozitář soukromý, uložte GitHub token (jen čtení obsahu) do `/root/.macadmin-token`.
+Na starém serveru zjistit, jak jsou MAC zapsané a co je v konfiguraci změněné:
+
+```
+mysql -u root -p radius -e "SELECT attribute, op, value, COUNT(*) FROM radcheck GROUP BY 1,2,3; SELECT COUNT(*) FROM nas;"
+rpm -Va 'freeradius*' | grep raddb        # konfiguracni soubory zmenene oproti balicku
+```
+
+Export jen potřebných tabulek (bez historie) a jejich import do nové databáze po načtení `schema.sql`:
+
+```
+mysqldump -u root -p --no-create-info --complete-insert radius radcheck radreply radgroupcheck radgroupreply radusergroup nas > radius-data.sql
+mysql -u root -p radius < radius-data.sql
+```
+
+Konfiguraci FreeRADIUS nekopírujte celou – na novém serveru nechte výchozí a přeneste jen změněné hodnoty (klienti
+z `clients.conf`, přístup k DB). Po instalaci rozhraní spusťte v Údržbě **Opravit zápis** (sjednotí nestandardně zapsané MAC)
+a `setup.sql` odstraní duplicitní záznamy. Pak ve wifi řadiči přepněte IP RADIUS serveru; návrat je jen vrácení původní IP.
