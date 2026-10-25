@@ -29,6 +29,7 @@ přes formulář (MS Forms) a správce potřebuje jen seznam povolených adres.
 | `import-forms.php` | automatický import z OneDrive z cronu |
 | `macadmin.conf` | konfigurace Apache |
 | `update.sh` | aktualizace na serveru z GitHubu |
+| `backup.sh` | kompletní záloha serveru do jednoho `.tgz` (`macadmin-zaloha`) |
 
 ---
 
@@ -185,7 +186,26 @@ syntaxi PHP, zazálohuje web do `/root/macadmin-zalohy`, nahraje nové soubory (
 Apache aktualizuje jen neupravenou, při změně `setup.sql` upraví databázi (zeptá se na heslo root do MariaDB), doplní cron
 a aktualizuje sám sebe. `--force` nainstaluje znovu i stejnou verzi. Z vlastního forku: `MACADMIN_REPO=uzivatel/repozitar macadmin-update`.
 
-## 6. Přechod z daloRADIUS (volitelné)
+## 6. Záloha celého serveru
+
+`macadmin-zaloha` uloží do jednoho archivu `.tgz` všechno, co je potřeba k obnově: aplikaci včetně `config.php`,
+stav a noční zálohy aplikace, pomocné skripty a cron, konfiguraci FreeRADIUS (`/etc/raddb`), Apache a TLS certifikát
+aplikace, nastavení MariaDB a PHP, dump databáze `radius` a její uživatele s právy. Postup obnovy je v archivu
+v souboru `OBNOVA.txt`. Archiv obsahuje hesla a klíče, je čitelný jen pro roota.
+
+```
+curl -fsSL https://raw.githubusercontent.com/vladava/macadmin/main/backup.sh -o /usr/local/sbin/macadmin-zaloha
+chmod 700 /usr/local/sbin/macadmin-zaloha     # dál ho aktualizuje macadmin-update
+
+macadmin-zaloha                    # do /root/macadmin-zalohy-serveru, nechá 10 posledních
+macadmin-zaloha -o /mnt/nas/zalohy # jinam, např. na připojený NAS
+macadmin-zaloha --bez-historie     # bez historie přihlášení – mnohem menší
+```
+
+Pravidelně z cronu, např. každou neděli ve 3:00: `echo '0 3 * * 0 root /usr/local/sbin/macadmin-zaloha -o /mnt/nas/zalohy > /dev/null' > /etc/cron.d/macadmin-zaloha`.
+Zálohu mějte i mimo server (NAS, PC) – při poruše disku by jinak zmizela s ním.
+
+## 7. Přechod z daloRADIUS (volitelné)
 
 Na starém serveru zjistit, jak jsou MAC zapsané a co je v konfiguraci změněné:
 

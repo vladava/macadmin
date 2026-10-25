@@ -1083,6 +1083,7 @@ apachectl configtest &amp;&amp; systemctl reload httpd</pre>
 <tr><th>Nastavení</th><td><code>/var/www/macadmin/config.php</code> – přístup do DB, jméno a hash hesla správce, <code>forms_url</code>, <code>alert_email</code></td></tr>
 <tr><th>Nové heslo správce</th><td><code>php -r 'echo password_hash("nove-heslo", PASSWORD_DEFAULT), PHP_EOL;'</code> a výsledek do <code>admin_pass_hash</code> (v jednoduchých uvozovkách)</td></tr>
 <tr><th>Cron</th><td><code>/etc/cron.d/macadmin</code> (promazání historie a záloha ve 2:15), <code>/etc/cron.d/macadmin-import</code> (import každých 10 min)</td></tr>
+<tr><th>Záloha celého serveru</th><td><code>macadmin-zaloha</code> (jako root) – aplikace, nastavení, FreeRADIUS, certifikát a dump databáze do jednoho <code>.tgz</code> v <code>/root/macadmin-zalohy-serveru</code>; <code>-o adresář</code> jinam, <code>--bez-historie</code> menší; obnova je popsaná v archivu v <code>OBNOVA.txt</code></td></tr>
 <tr><th>Zálohy seznamu</th><td><code>/var/lib/macadmin/zalohy/</code> (CSV, každou noc, 30 dní)</td></tr>
 <tr><th>Logy</th><td><code>/var/log/macadmin-import.log</code>, <code>/var/log/macadmin-udrzba.log</code>, <code>/var/log/radius/radius.log</code></td></tr>
 <tr><th>FreeRADIUS</th><td><code>/etc/raddb/clients.conf</code> (wifi řadič / AP a sdílené heslo), <code>/etc/raddb/mods-available/sql</code> (databáze); kontrola <code>radiusd -XC</code></td></tr>

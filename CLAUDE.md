@@ -22,6 +22,7 @@ a obecný – nic specifického pro konkrétní školu (název, domény, e-maily
 - `config.sample.php` – všechny volby s popisem; nová volba vždy sem (Údržba ukáže, které v `config.php` chybí) a kód musí mít rozumnou výchozí hodnotu
 - `macadmin.conf` – Apache (přístup jen ze správcovské sítě)
 - `update.sh` – aktualizace na serveru z GitHubu (`/usr/local/sbin/macadmin-update`): záloha, nové soubory, Apache, setup.sql, cron; seznam souborů aplikace je v `APP_FILES`
+- `backup.sh` – kompletní záloha serveru do jednoho `.tgz` (`/usr/local/sbin/macadmin-zaloha`; instaluje a aktualizuje ho `update.sh`): soubory aplikace a konfigurace, dump DB `radius` a její uživatelé, `OBNOVA.txt`; při přidání souboru/konfigurace na server doplnit do `PATHS`
 - `README.md` – instalace, nastavení, Forms/Power Automate, přechod z daloRADIUS
 
 ## Zásady

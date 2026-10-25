@@ -129,6 +129,12 @@ for log in /var/log/macadmin-udrzba.log /var/log/macadmin-import.log; do
     chown apache "$log"
 done
 
+# --- zalohovaci skript macadmin-zaloha (nainstalovat nebo aktualizovat) ---
+if [[ -f "$TMP/backup.sh" ]] && ! cmp -s "$TMP/backup.sh" /usr/local/sbin/macadmin-zaloha; then
+    install -m 700 "$TMP/backup.sh" /usr/local/sbin/macadmin-zaloha
+    echo "Skript macadmin-zaloha nainstalovan / aktualizovan."
+fi
+
 # --- hotovo ---
 echo "$SHA" > "$STATE/version"
 cp "$TMP/macadmin.conf" "$STATE/macadmin.conf"
