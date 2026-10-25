@@ -607,7 +607,8 @@ function stats_refresh(): void
 
 /**
  * Sloupcovy graf: $points = [['label' => osa, 'tip' => popisek pri najeti, 'v' => [rada => cislo]], ...],
- * $series = [rada => [nazev, css trida barvy]]. Legenda od 2 rad, cislo jen nad nejvyssim sloupcem prvni rady.
+ * $series = [rada => [nazev, css trida barvy]]. Legenda od 2 rad. Cisla nad vsemi nenulovymi sloupci, kdyz je jich
+ * nejvys 31 na radu (jinak a na uzkem displeji jen nad nejvyssim sloupcem prvni rady).
  */
 function bar_chart(array $points, array $series, int $maxLabels = 10): string
 {
@@ -628,12 +629,12 @@ function bar_chart(array $points, array $series, int $maxLabels = 10): string
         }
         $html .= '</div>';
     }
-    $html .= '<div class="gbars">';
+    $html .= '<div class="gbars' . (count($points) <= 31 ? ' all' : '') . '">';
     foreach ($points as $i => $pt) {
         $html .= '<div class="grp" data-tip="' . h($pt['tip']) . '" aria-label="' . h($pt['tip']) . '">';
         foreach ($keys as $j => $k) {
             $v = (int)($pt['v'][$k] ?? 0);
-            $lab = $j === 0 && $i === $peak && $v > 0 ? '<b>' . $v . '</b>' : '';
+            $lab = $v > 0 ? '<b' . ($j === 0 && $i === $peak ? ' class="pk"' : '') . '>' . $v . '</b>' : '';
             // popisek uvnitr sloupce (absolutne nad nim), aby sloupec nezmensoval
             $html .= '<div class="col"><span class="' . $series[$k][1] . '" style="height:' . round($v / $max * 100, 1) . '%">' . $lab . '</span></div>';
         }
@@ -1128,7 +1129,9 @@ th a.sort{color:inherit;text-decoration:none}th a.sort:hover{color:var(--acc)}
 .bars{display:flex;align-items:flex-end;gap:2px;height:160px;padding-top:20px;border-bottom:1px solid var(--line)}
 .bar{flex:1;min-width:3px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;position:relative}
 .bar span{display:block;position:relative;width:100%;max-width:32px;min-height:1px;background:var(--acc);border-radius:4px 4px 0 0}
-.bar b,.grp b{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);margin-bottom:2px;font-size:12px;font-weight:600;color:var(--fg);white-space:nowrap}.bar:hover span{opacity:.75}
+.bar b,.grp b{display:none;position:absolute;bottom:100%;left:50%;transform:translateX(-50%);margin-bottom:2px;font-size:11px;font-weight:600;color:var(--fg);white-space:nowrap}
+.bar b.pk,.grp b.pk,.bars.all b,.gbars.all b{display:block}
+@media (max-width:700px){.bars.all b:not(.pk),.gbars.all b:not(.pk){display:none}}.bar:hover span{opacity:.75}
 .bar:hover::after{content:attr(data-tip);position:absolute;bottom:100%;left:50%;transform:translateX(-50%);white-space:nowrap;background:var(--fg);color:var(--bg);font-size:12px;padding:3px 8px;border-radius:4px;z-index:1;pointer-events:none}
 .gbars{display:flex;align-items:flex-end;gap:4px;height:180px;padding-top:20px;border-bottom:1px solid var(--line)}
 .grp{flex:1;min-width:4px;height:100%;display:flex;align-items:flex-end;justify-content:center;gap:2px;position:relative}

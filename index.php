@@ -538,12 +538,12 @@ try {
         $max = max(1, max(array_column($perDay, 'rej')));
         $maxDay = array_search(max(array_column($perDay, 'rej')), array_column($perDay, 'rej'), true);
         $step = (int)ceil($days / 10); // popisky osy nejvys u 10 dni (at se nepekryvaji ani na mobilu)
-        echo '<div class="card"><h2>Zamítnutá zařízení po dnech</h2><div class="bars">';
+        echo '<div class="card"><h2>Zamítnutá zařízení po dnech</h2><div class="bars' . ($days <= 31 ? ' all' : '') . '">';
         $i = 0;
         foreach ($perDay as $den => $x) {
             $dt = new DateTimeImmutable($den);
             $tip = $dt->format('j. n.') . ': ' . $x['rej'] . ' zařízení, ' . $x['rejTry'] . ' pokusů';
-            $label = ($i === $maxDay || $i === $days - 1) && $x['rej'] > 0 ? '<b>' . $x['rej'] . '</b>' : '';
+            $label = $x['rej'] > 0 ? '<b' . ($i === $maxDay ? ' class="pk"' : '') . '>' . $x['rej'] . '</b>' : '';
             // popisek uvnitr sloupce (absolutne nad nim), aby sloupec nezmensoval
             echo '<div class="bar" data-tip="' . h($tip) . '" aria-label="' . h($tip) . '">'
                 . '<span style="height:' . round($x['rej'] / $max * 100, 1) . '%">' . $label . '</span></div>';
