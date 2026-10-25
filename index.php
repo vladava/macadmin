@@ -128,7 +128,8 @@ try {
         }
         echo '<div class="card"><h2>Zařízení – povolená a zamítnutá</h2><div class="seg">';
         foreach ($names as $k => [$lab]) {
-            echo '<a href="?p=prehled&g=' . $k . '"' . ($k === $g ? ' class="on"' : '') . '>' . $lab . '</a>';
+            echo '<a href="?' . h(http_build_query(['p' => 'prehled', 'g' => $k] + array_intersect_key($_GET, ['to' => 1, 'td' => 1]))) . '"'
+                . ($k === $g ? ' class="on"' : '') . '>' . $lab . '</a>';
         }
         echo '</div>';
         if (!$series) {
@@ -188,10 +189,30 @@ try {
              FROM radcheck r LEFT JOIN mac_info i ON i.mac = r.username WHERE r.attribute = ? GROUP BY 1");
         $st->execute([$d(6), $attr]);
         $tridy = $st->fetchAll();
-        usort($tridy, fn($a, $b) => [$a['trida'] === '', $a['trida']] <=> [$b['trida'] === '', $b['trida']]); // bez tridy na konec
+        // trideni klikem na zahlavi: to = trida | celkem | aktivni | procent, td = asc | desc; "bez tridy" vzdy na konci
+        $to = in_array($_GET['to'] ?? '', ['celkem', 'aktivni', 'procent'], true) ? $_GET['to'] : 'trida';
+        $td = ($_GET['td'] ?? '') === 'desc' ? 'desc' : 'asc';
+        $sortVal = fn($r) => match ($to) {
+            'celkem'  => (int)$r['celkem'],
+            'aktivni' => (int)$r['aktivni'],
+            'procent' => $r['celkem'] > 0 ? $r['aktivni'] / $r['celkem'] : 0,
+            default   => (string)$r['trida'],
+        };
+        usort($tridy, function ($a, $b) use ($sortVal, $td) {
+            if (($a['trida'] === '') !== ($b['trida'] === '')) {
+                return $a['trida'] === '' ? 1 : -1;
+            }
+            $c = $sortVal($a) <=> $sortVal($b);
+            return ($td === 'desc' ? -$c : $c) ?: strcmp((string)$a['trida'], (string)$b['trida']);
+        });
+        $thT = function (string $key, string $label) use ($to, $td, $g): string {
+            $next = $to === $key && $td === 'asc' ? 'desc' : ($to === $key ? 'asc' : ($key === 'trida' ? 'asc' : 'desc'));
+            return '<th><a class="sort" href="?p=prehled&amp;g=' . $g . '&amp;to=' . $key . '&amp;td=' . $next . '#tridy">' . $label
+                . ($to === $key ? ($td === 'asc' ? ' ▲' : ' ▼') : '') . '</a></th>';
+        };
         if (count($tridy) > 1) {
-            echo '<div class="card"><h2>Aktivita podle tříd (posledních 7 dní)</h2><div class="scroll"><table>'
-                . '<tr><th>Třída</th><th>Zařízení</th><th>Aktivních</th><th></th></tr>';
+            echo '<div class="card" id="tridy"><h2>Aktivita podle tříd (posledních 7 dní)</h2><div class="scroll"><table>'
+                . '<tr>' . $thT('trida', 'Třída') . $thT('celkem', 'Zařízení') . $thT('aktivni', 'Aktivních') . $thT('procent', 'Podíl aktivních') . '</tr>';
             foreach ($tridy as $r) {
                 $p = $r['celkem'] > 0 ? round($r['aktivni'] / $r['celkem'] * 100) : 0;
                 $link = $r['trida'] !== '' ? '<a href="?p=zarizeni&t=' . urlencode($r['trida']) . '">' . h($r['trida']) . '</a>' : '<span class="mut">bez třídy</span>';
@@ -898,7 +919,7 @@ zamítnutá zařízení dnes a nová zařízení za týden. Nahoře se ukáže u
 <li><strong>Zařízení – povolená a zamítnutá</strong> – po dnech (30 dní), týdnech (12) nebo měsících (12). <em>Zařízení</em> = různé MAC adresy v období, v tabulce jsou i počty pokusů.
 Souhrny uzavřených dnů, týdnů a měsíců se ukládají (tabulka <code>statistika</code>), takže zůstanou i po promazání historie přihlášení po {$keepDays} dnech.</li>
 <li><strong>Vytížení během dne</strong> – průměrný počet připojených zařízení v jednotlivých hodinách za poslední pracovní dny.</li>
-<li><strong>Aktivita podle tříd</strong> – kolik zařízení třídy se za týden připojilo; nízké procento = staré telefony nebo absolventi k úklidu.</li>
+<li><strong>Aktivita podle tříd</strong> – kolik zařízení třídy se za týden připojilo; nízké procento = staré telefony nebo absolventi k úklidu. Řadit jde klikem na záhlaví (třída, počet zařízení, aktivních, podíl), „bez třídy“ je vždy na konci.</li>
 <li><strong>Nejčastěji zamítaná zařízení dnes</strong> – žáci se špatně zadanou adresou; <em>povolit…</em> rovnou zařízení přidá.</li>
 </ul>
 </div>
