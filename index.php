@@ -544,8 +544,9 @@ try {
             $dt = new DateTimeImmutable($den);
             $tip = $dt->format('j. n.') . ': ' . $x['rej'] . ' zařízení, ' . $x['rejTry'] . ' pokusů';
             $label = ($i === $maxDay || $i === $days - 1) && $x['rej'] > 0 ? '<b>' . $x['rej'] . '</b>' : '';
-            echo '<div class="bar" data-tip="' . h($tip) . '" aria-label="' . h($tip) . '">' . $label
-                . '<span style="height:' . round($x['rej'] / $max * 100, 1) . '%"></span></div>';
+            // popisek uvnitr sloupce (absolutne nad nim), aby sloupec nezmensoval
+            echo '<div class="bar" data-tip="' . h($tip) . '" aria-label="' . h($tip) . '">'
+                . '<span style="height:' . round($x['rej'] / $max * 100, 1) . '%">' . $label . '</span></div>';
             $i++;
         }
         echo '</div><div class="bars-axis">';

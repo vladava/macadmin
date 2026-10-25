@@ -634,7 +634,8 @@ function bar_chart(array $points, array $series, int $maxLabels = 10): string
         foreach ($keys as $j => $k) {
             $v = (int)($pt['v'][$k] ?? 0);
             $lab = $j === 0 && $i === $peak && $v > 0 ? '<b>' . $v . '</b>' : '';
-            $html .= '<div class="col">' . $lab . '<span class="' . $series[$k][1] . '" style="height:' . round($v / $max * 100, 1) . '%"></span></div>';
+            // popisek uvnitr sloupce (absolutne nad nim), aby sloupec nezmensoval
+            $html .= '<div class="col"><span class="' . $series[$k][1] . '" style="height:' . round($v / $max * 100, 1) . '%">' . $lab . '</span></div>';
         }
         $html .= '</div>';
     }
@@ -1126,13 +1127,13 @@ th a.sort{color:inherit;text-decoration:none}th a.sort:hover{color:var(--acc)}
 .tile b{display:block;font-size:24px;font-weight:600}.tile span{color:var(--mut);font-size:13px}.tile.warn{background:var(--warn)}
 .bars{display:flex;align-items:flex-end;gap:2px;height:160px;padding-top:20px;border-bottom:1px solid var(--line)}
 .bar{flex:1;min-width:3px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;position:relative}
-.bar span{display:block;width:100%;max-width:32px;min-height:1px;background:var(--acc);border-radius:4px 4px 0 0}
-.bar b{font-size:12px;font-weight:600;margin-bottom:2px}.bar:hover span{opacity:.75}
+.bar span{display:block;position:relative;width:100%;max-width:32px;min-height:1px;background:var(--acc);border-radius:4px 4px 0 0}
+.bar b,.grp b{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);margin-bottom:2px;font-size:12px;font-weight:600;color:var(--fg);white-space:nowrap}.bar:hover span{opacity:.75}
 .bar:hover::after{content:attr(data-tip);position:absolute;bottom:100%;left:50%;transform:translateX(-50%);white-space:nowrap;background:var(--fg);color:var(--bg);font-size:12px;padding:3px 8px;border-radius:4px;z-index:1;pointer-events:none}
 .gbars{display:flex;align-items:flex-end;gap:4px;height:180px;padding-top:20px;border-bottom:1px solid var(--line)}
 .grp{flex:1;min-width:4px;height:100%;display:flex;align-items:flex-end;justify-content:center;gap:2px;position:relative}
 .grp .col{flex:1;max-width:22px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center}
-.grp span{display:block;width:100%;min-height:1px;border-radius:4px 4px 0 0}.grp b{font-size:12px;font-weight:600;margin-bottom:2px}
+.grp span{display:block;position:relative;width:100%;min-height:1px;border-radius:4px 4px 0 0}
 .s1{background:var(--s1)}.s2{background:var(--s2)}.grp:hover span{opacity:.75}
 .grp:hover::after{content:attr(data-tip);position:absolute;bottom:100%;left:50%;transform:translateX(-50%);white-space:nowrap;background:var(--fg);color:var(--bg);font-size:12px;padding:3px 8px;border-radius:4px;z-index:1;pointer-events:none}
 .legend{display:flex;gap:16px;font-size:13px;color:var(--mut);margin:0 0 4px}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
