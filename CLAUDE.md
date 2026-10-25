@@ -14,11 +14,11 @@ a obecný – nic specifického pro konkrétní školu (název, domény, e-maily
 - Jediný uživatel rozhraní je správce (jeden účet v `config.php`, heslo jako hash).
 
 ## Struktura
-- `index.php` – všechny stránky (`?p=zarizeni|pridat|zamitnuta|smazana|import|udrzba|napoveda|login|logout`); nápověda pro správce je stránka `napoveda` – při změně chování ji aktualizovat
+- `index.php` – všechny stránky (`?p=prehled|zarizeni|pridat|zamitnuta|smazana|import|udrzba|napoveda|login|logout`; `prehled` = statistiky, úvodní stránka po přihlášení); nápověda pro správce je stránka `napoveda` – při změně chování ji aktualizovat
 - `lib.php` – DB, přihlášení, CSRF, normalizace MAC, čtení XLSX (ZipArchive + SimpleXML, bez knihoven), import, vzhled
 - `udrzba.php` – CLI skript pro cron (promazání `radpostauth`, noční záloha seznamu do `/var/lib/macadmin/zalohy`)
 - `import-forms.php` – CLI skript pro cron (import Excelu z OneDrive podle `forms_url`, upozornění na `alert_email`)
-- `setup.sql` – tabulky `mac_info`, `mac_smazane` (smazané MAC i s údaji – import je znovu nepřidá, stránka Smazaná je obnoví), `macadmin_stav` (stav importu a zálohy pro Údržbu) a `import_historie` (importy, které přidaly zařízení), indexy, DB uživatel `macadmin`
+- `setup.sql` – tabulky `mac_info`, `mac_smazane` (smazané MAC i s údaji – import je znovu nepřidá, stránka Smazaná je obnoví), `macadmin_stav` (stav importu a zálohy pro Údržbu), `import_historie` (importy, které přidaly zařízení) a `statistika` (souhrny uzavřených dnů/týdnů/měsíců – přežijí promazání `radpostauth`; ukládá je `stats_series()` a noční `udrzba.php` před promazáním), indexy, DB uživatel `macadmin`
 - `config.sample.php` – všechny volby s popisem; nová volba vždy sem (Údržba ukáže, které v `config.php` chybí) a kód musí mít rozumnou výchozí hodnotu
 - `macadmin.conf` – Apache (přístup jen ze správcovské sítě)
 - `update.sh` – aktualizace na serveru z GitHubu (`/usr/local/sbin/macadmin-update`): záloha, nové soubory, Apache, setup.sql, cron; seznam souborů aplikace je v `APP_FILES`

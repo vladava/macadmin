@@ -48,10 +48,22 @@ DELETE r1 FROM radcheck r1 JOIN radcheck r2
   ON r1.username = r2.username AND r1.attribute = r2.attribute AND r1.id > r2.id;
 ALTER TABLE radcheck ADD UNIQUE INDEX IF NOT EXISTS user_attr (username, attribute);
 
+-- Souhrnne statistiky za uzavrena obdobi (D2026-10-24 / W2026-43 / M2026-10) - zustanou i po promazani radpostauth
+CREATE TABLE IF NOT EXISTS statistika (
+  obdobi              CHAR(11)  NOT NULL PRIMARY KEY,
+  povoleno_zarizeni   INT       NOT NULL,
+  povoleno_pokusu     INT       NOT NULL,
+  zamitnuto_zarizeni  INT       NOT NULL,
+  zamitnuto_pokusu    INT       NOT NULL,
+  spocteno            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- Index pro rychle hledani podle data (zamitnuta zarizeni, promazavani)
 -- (IF NOT EXISTS: skript jde spustit opakovane)
 ALTER TABLE radpostauth ADD INDEX IF NOT EXISTS authdate (authdate);
 ALTER TABLE radpostauth ADD INDEX IF NOT EXISTS reply_date (reply, authdate);
+-- pro statistiky (pocty ruznych zarizeni za obdobi jen z indexu)
+ALTER TABLE radpostauth ADD INDEX IF NOT EXISTS reply_date_user (reply, authdate, username);
 -- posledni prihlaseni zarizeni (sloupec Naposledy, filtr neprihlasenych)
 ALTER TABLE radpostauth ADD INDEX IF NOT EXISTS user_reply_date (username, reply, authdate);
 
@@ -62,5 +74,6 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON radius.mac_info    TO 'macadmin'@'localh
 GRANT SELECT, INSERT, UPDATE, DELETE ON radius.mac_smazane TO 'macadmin'@'localhost';
 GRANT SELECT, INSERT, UPDATE, DELETE ON radius.macadmin_stav TO 'macadmin'@'localhost';
 GRANT SELECT, INSERT, DELETE ON radius.import_historie TO 'macadmin'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE ON radius.statistika TO 'macadmin'@'localhost';
 GRANT SELECT, DELETE                 ON radius.radpostauth TO 'macadmin'@'localhost';
 FLUSH PRIVILEGES;

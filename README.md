@@ -6,6 +6,7 @@ přes formulář (MS Forms) a správce potřebuje jen seznam povolených adres.
 
 **Funkce**
 
+- přehled po přihlášení: připojená a zamítnutá zařízení po dnech / týdnech / měsících, vytížení během dne, aktivita podle tříd
 - seznam povolených zařízení: hledání (i podle části MAC v libovolném zápisu), filtry podle třídy, náhodných adres,
   zařízení dlouho nepřipojených nebo počtu zařízení na e-mail, třídění podle sloupců, sloupec „naposledy připojeno“
 - přidání / úprava / smazání, u zařízení historie posledních pokusů o připojení

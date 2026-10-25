@@ -514,6 +514,139 @@ function device_filter(array $src): array
     ];
 }
 
+/* ---------- Statistiky ---------- */
+
+/** Pocty povolenych a zamitnutych zarizeni (ruznych MAC) a pokusu za obdobi [od, do). */
+function stats_compute(string $from, string $to): array
+{
+    $st = db()->prepare(
+        "SELECT reply, COUNT(*) AS pokusu, COUNT(DISTINCT username) AS zarizeni FROM radpostauth
+         WHERE reply IN ('Access-Accept', 'Access-Reject') AND authdate >= ? AND authdate < ? GROUP BY reply"
+    );
+    $st->execute([$from, $to]);
+    $r = ['povoleno_zarizeni' => 0, 'povoleno_pokusu' => 0, 'zamitnuto_zarizeni' => 0, 'zamitnuto_pokusu' => 0];
+    foreach ($st as $x) {
+        $k = $x['reply'] === 'Access-Accept' ? 'povoleno' : 'zamitnuto';
+        $r[$k . '_zarizeni'] = (int)$x['zarizeni'];
+        $r[$k . '_pokusu'] = (int)$x['pokusu'];
+    }
+    return $r;
+}
+
+/** Poslednich $n obdobi vcetne aktualniho: $gran = den | tyden (od pondeli) | mesic. */
+function stats_periods(string $gran, int $n): array
+{
+    $today = new DateTimeImmutable('today');
+    $out = [];
+    for ($i = $n - 1; $i >= 0; $i--) {
+        if ($gran === 'tyden') {
+            $from = $today->modify('monday this week')->modify("-$i weeks");
+            $to = $from->modify('+1 week');
+            $key = 'W' . $from->format('o-W');
+            $label = $from->format('j.n.');
+        } elseif ($gran === 'mesic') {
+            $from = $today->modify('first day of this month')->modify("-$i months");
+            $to = $from->modify('first day of next month');
+            $key = 'M' . $from->format('Y-m');
+            $label = $from->format('n/Y');
+        } else {
+            $from = $today->modify("-$i days");
+            $to = $from->modify('+1 day');
+            $key = 'D' . $from->format('Y-m-d');
+            $label = $from->format('j.n.');
+        }
+        $out[] = ['key' => $key, 'from' => $from, 'to' => $to, 'label' => $label, 'complete' => $to <= $today];
+    }
+    return $out;
+}
+
+/**
+ * Statistika po obdobich. Uzavrena obdobi se berou z tabulky statistika (a chybejici se tam dopocitaji z radpostauth),
+ * aktualni se pocita vzdy znovu. Obdobi bez dat (pred zacatkem historie) maji 'data' => null.
+ */
+function stats_series(string $gran, int $n): array
+{
+    $periods = stats_periods($gran, $n);
+    $pdo = db();
+    $st = $pdo->prepare('SELECT * FROM statistika WHERE obdobi IN (' . implode(',', array_fill(0, count($periods), '?')) . ')');
+    $st->execute(array_column($periods, 'key'));
+    $cache = [];
+    foreach ($st as $r) {
+        $cache[$r['obdobi']] = $r;
+    }
+    $first = $pdo->query('SELECT MIN(authdate) FROM radpostauth')->fetchColumn();
+    $firstDay = $first ? substr((string)$first, 0, 10) : null;
+    $save = $pdo->prepare(
+        'INSERT INTO statistika (obdobi, povoleno_zarizeni, povoleno_pokusu, zamitnuto_zarizeni, zamitnuto_pokusu) VALUES (?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE povoleno_zarizeni = VALUES(povoleno_zarizeni), povoleno_pokusu = VALUES(povoleno_pokusu),
+           zamitnuto_zarizeni = VALUES(zamitnuto_zarizeni), zamitnuto_pokusu = VALUES(zamitnuto_pokusu), spocteno = NOW()'
+    );
+    foreach ($periods as &$p) {
+        $p['data'] = null;
+        if ($p['complete'] && isset($cache[$p['key']])) {
+            $p['data'] = array_map('intval', array_intersect_key($cache[$p['key']], array_flip(
+                ['povoleno_zarizeni', 'povoleno_pokusu', 'zamitnuto_zarizeni', 'zamitnuto_pokusu'])));
+        } elseif ($firstDay !== null && $p['to']->format('Y-m-d') > $firstDay) {
+            $p['data'] = stats_compute($p['from']->format('Y-m-d'), $p['to']->format('Y-m-d'));
+            if ($p['complete']) {
+                $save->execute([$p['key'], $p['data']['povoleno_zarizeni'], $p['data']['povoleno_pokusu'],
+                    $p['data']['zamitnuto_zarizeni'], $p['data']['zamitnuto_pokusu']]);
+            }
+        }
+    }
+    return $periods;
+}
+
+/** Ulozi souhrny uzavrenych obdobi, dokud jsou data v radpostauth (spousti udrzba.php pred promazanim). */
+function stats_refresh(): void
+{
+    stats_series('den', 100);
+    stats_series('tyden', 16);
+    stats_series('mesic', 4);
+}
+
+/**
+ * Sloupcovy graf: $points = [['label' => osa, 'tip' => popisek pri najeti, 'v' => [rada => cislo]], ...],
+ * $series = [rada => [nazev, css trida barvy]]. Legenda od 2 rad, cislo jen nad nejvyssim sloupcem prvni rady.
+ */
+function bar_chart(array $points, array $series, int $maxLabels = 10): string
+{
+    $keys = array_keys($series);
+    $max = 1;
+    foreach ($points as $pt) {
+        foreach ($keys as $k) {
+            $max = max($max, (int)($pt['v'][$k] ?? 0));
+        }
+    }
+    $firstVals = array_map(fn($pt) => (int)($pt['v'][$keys[0]] ?? 0), $points);
+    $peak = $firstVals ? array_search(max($firstVals), $firstVals, true) : -1;
+    $html = '';
+    if (count($series) > 1) {
+        $html .= '<div class="legend">';
+        foreach ($series as [$name, $cls]) {
+            $html .= '<span><i class="' . $cls . '"></i>' . h($name) . '</span>';
+        }
+        $html .= '</div>';
+    }
+    $html .= '<div class="gbars">';
+    foreach ($points as $i => $pt) {
+        $html .= '<div class="grp" data-tip="' . h($pt['tip']) . '" aria-label="' . h($pt['tip']) . '">';
+        foreach ($keys as $j => $k) {
+            $v = (int)($pt['v'][$k] ?? 0);
+            $lab = $j === 0 && $i === $peak && $v > 0 ? '<b>' . $v . '</b>' : '';
+            $html .= '<div class="col">' . $lab . '<span class="' . $series[$k][1] . '" style="height:' . round($v / $max * 100, 1) . '%"></span></div>';
+        }
+        $html .= '</div>';
+    }
+    $html .= '</div><div class="bars-axis">';
+    $n = count($points);
+    $step = max(1, (int)ceil($n / $maxLabels));
+    foreach (array_values($points) as $i => $pt) {
+        $html .= '<small>' . (($n - 1 - $i) % $step === 0 ? h($pt['label']) : '') . '</small>'; // od posledniho zpet
+    }
+    return $html . '</div>';
+}
+
 /* ---------- Import (Excel z MS Forms, CSV, vlozeny text) ---------- */
 
 /**
@@ -910,6 +1043,7 @@ function send_alert(string $subject, string $body): bool
 function page_header(string $title, string $active = ''): void
 {
     $menu = [
+        'prehled'   => 'Přehled',
         'zarizeni'  => 'Zařízení',
         'pridat'    => 'Přidat',
         'zamitnuta' => 'Zamítnutá',
@@ -967,8 +1101,8 @@ function page_footer(): void
 function css(): string
 {
     return <<<CSS
-:root{--bg:#f6f7f9;--fg:#1d2330;--mut:#667085;--card:#fff;--line:#e3e6ea;--acc:#1f5fbf;--ok:#e7f6ec;--okf:#17643a;--err:#fdecec;--errf:#9b1c1c;--warn:#fff6e0}
-@media (prefers-color-scheme:dark){:root{--bg:#14171c;--fg:#e6e8eb;--mut:#9aa3af;--card:#1c2027;--line:#2c323b;--acc:#6aa2ff;--ok:#16301f;--okf:#8fd9a8;--err:#3a1a1a;--errf:#f2a3a3;--warn:#3a3016}}
+:root{--bg:#f6f7f9;--fg:#1d2330;--mut:#667085;--card:#fff;--line:#e3e6ea;--acc:#1f5fbf;--ok:#e7f6ec;--okf:#17643a;--err:#fdecec;--errf:#9b1c1c;--warn:#fff6e0;--s1:#2a78d6;--s2:#eb6834}
+@media (prefers-color-scheme:dark){:root{--bg:#14171c;--fg:#e6e8eb;--mut:#9aa3af;--card:#1c2027;--line:#2c323b;--acc:#6aa2ff;--ok:#16301f;--okf:#8fd9a8;--err:#3a1a1a;--errf:#f2a3a3;--warn:#3a3016;--s1:#3987e5;--s2:#d95926}}
 *{box-sizing:border-box}body{margin:0;font:15px/1.45 system-ui,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--fg)}
 nav{display:flex;flex-wrap:wrap;gap:4px 16px;align-items:center;padding:10px 16px;background:var(--card);border-bottom:1px solid var(--line)}
 a{color:var(--acc)}.nowrap{white-space:nowrap}
@@ -988,13 +1122,22 @@ button.link{background:none;border:0;color:var(--acc);padding:0}
 .tag{display:inline-block;font-size:12px;padding:1px 6px;border-radius:4px;background:var(--warn)}.mut{color:var(--mut)}
 .scroll{overflow-x:auto}
 th a.sort{color:inherit;text-decoration:none}th a.sort:hover{color:var(--acc)}
-.tiles{display:flex;flex-wrap:wrap;gap:12px;margin:0 0 16px}.tile{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 14px;min-width:150px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin:0 0 16px}.tile{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 14px}
 .tile b{display:block;font-size:24px;font-weight:600}.tile span{color:var(--mut);font-size:13px}.tile.warn{background:var(--warn)}
 .bars{display:flex;align-items:flex-end;gap:2px;height:160px;padding-top:20px;border-bottom:1px solid var(--line)}
 .bar{flex:1;min-width:3px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;position:relative}
 .bar span{display:block;width:100%;max-width:32px;min-height:1px;background:var(--acc);border-radius:4px 4px 0 0}
 .bar b{font-size:12px;font-weight:600;margin-bottom:2px}.bar:hover span{opacity:.75}
 .bar:hover::after{content:attr(data-tip);position:absolute;bottom:100%;left:50%;transform:translateX(-50%);white-space:nowrap;background:var(--fg);color:var(--bg);font-size:12px;padding:3px 8px;border-radius:4px;z-index:1;pointer-events:none}
+.gbars{display:flex;align-items:flex-end;gap:4px;height:180px;padding-top:20px;border-bottom:1px solid var(--line)}
+.grp{flex:1;min-width:4px;height:100%;display:flex;align-items:flex-end;justify-content:center;gap:2px;position:relative}
+.grp .col{flex:1;max-width:22px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center}
+.grp span{display:block;width:100%;min-height:1px;border-radius:4px 4px 0 0}.grp b{font-size:12px;font-weight:600;margin-bottom:2px}
+.s1{background:var(--s1)}.s2{background:var(--s2)}.grp:hover span{opacity:.75}
+.grp:hover::after{content:attr(data-tip);position:absolute;bottom:100%;left:50%;transform:translateX(-50%);white-space:nowrap;background:var(--fg);color:var(--bg);font-size:12px;padding:3px 8px;border-radius:4px;z-index:1;pointer-events:none}
+.legend{display:flex;gap:16px;font-size:13px;color:var(--mut);margin:0 0 4px}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+.tile small{display:block;color:var(--mut);font-size:12px;margin-top:2px}.seg{display:flex;gap:4px;margin:0 0 8px}.seg a{padding:3px 10px;border:1px solid var(--line);border-radius:6px;text-decoration:none;font-size:13px}.seg a.on{background:var(--acc);border-color:var(--acc);color:#fff}
+.gbars+.bars-axis{gap:4px}.meter{background:var(--line);border-radius:4px;height:8px;min-width:80px}.meter span{display:block;height:100%;border-radius:4px;background:var(--s1)}
 .bars-axis{display:flex;gap:2px;margin:2px 0 8px}.bars-axis small{flex:1;min-width:3px;text-align:center;color:var(--mut);font-size:11px;white-space:nowrap;overflow:visible}
 footer{max-width:1100px;margin:8px auto 24px;padding:0 16px;color:var(--mut);font-size:12px}
 details.help-login{max-width:820px;font-size:14px}details.help-login summary{cursor:pointer;color:var(--acc)}

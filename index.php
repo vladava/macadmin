@@ -14,7 +14,7 @@ function flash_kept(array $others): void
     }
 }
 ob_start(); // pri chybe DB zahodit rozpracovanou stranku
-$p = $_GET['p'] ?? 'zarizeni';
+$p = $_GET['p'] ?? 'prehled';
 $post = $_SERVER['REQUEST_METHOD'] === 'POST';
 
 /* ---------- Prihlaseni ---------- */
@@ -22,7 +22,7 @@ if (!is_logged_in()) {
     if ($post && $p === 'login') {
         check_csrf();
         if (try_login((string)($_POST['user'] ?? ''), (string)($_POST['pass'] ?? ''))) {
-            redirect('?p=zarizeni');
+            redirect('?p=prehled');
         }
         flash('Špatné jméno nebo heslo.', 'err');
         redirect('?p=login');
@@ -63,6 +63,162 @@ try {
         $_SESSION = [];
         session_destroy();
         redirect('?p=login');
+
+    /* ---------- Prehled (statistiky) ---------- */
+    case 'prehled':
+        $pdo = db();
+        $attr = cfg('radcheck_attribute');
+        $today = new DateTimeImmutable('today');
+        $d = fn(int $days) => $today->modify("-$days days")->format('Y-m-d');
+        $num = fn($n) => number_format((int)$n, 0, ',', ' ');
+        // dlazdice
+        [$yday, $tday] = array_slice(stats_series('den', 2), -2);
+        $total = (int)$pdo->query("SELECT COUNT(*) FROM radcheck WHERE attribute = " . $pdo->quote($attr))->fetchColumn();
+        $active = function (string $since) use ($pdo, $attr): int {
+            $st = $pdo->prepare("SELECT COUNT(*) FROM radcheck r WHERE r.attribute = ? AND EXISTS
+                (SELECT 1 FROM radpostauth p WHERE p.username = r.username AND p.reply = 'Access-Accept' AND p.authdate >= ?)");
+            $st->execute([$attr, $since]);
+            return (int)$st->fetchColumn();
+        };
+        $act7 = $active($d(6));
+        $act30 = $active($d(29));
+        $st = $pdo->prepare("SELECT COUNT(DISTINCT p.username) FROM radpostauth p JOIN radcheck r ON r.username = p.username AND r.attribute = ?
+                             WHERE p.reply = 'Access-Reject' AND p.authdate >= ?");
+        $st->execute([$attr, $today->format('Y-m-d')]);
+        $knownRej = (int)$st->fetchColumn();
+        $st = $pdo->prepare('SELECT COUNT(*) FROM mac_info i JOIN radcheck r ON r.username = i.mac AND r.attribute = ? WHERE i.vytvoreno >= ?');
+        $st->execute([$attr, $d(6)]);
+        $new7 = (int)$st->fetchColumn();
+        $st = $pdo->prepare("SELECT COUNT(*) FROM radcheck WHERE attribute = ? AND
+            UPPER(SUBSTRING(REPLACE(REPLACE(REPLACE(username, ':', ''), '-', ''), '.', ''), 2, 1)) IN ('2', '6', 'A', 'E')");
+        $st->execute([$attr]);
+        $random = (int)$st->fetchColumn();
+        $first = $pdo->query('SELECT MIN(authdate) FROM radpostauth')->fetchColumn();
+        $histDays = $first ? (int)(new DateTimeImmutable(substr((string)$first, 0, 10)))->diff($today)->days + 1 : 0;
+        $pct = fn($a, $b) => $b > 0 ? round($a / $b * 100) . ' %' : '–';
+
+        page_header('Přehled', 'prehled');
+        $imp = state_get('import');
+        if (isset($imp['since'])) {
+            echo '<div class="flash err">Import z OneDrive nefunguje od ' . h($imp['since']) . ': ' . h($imp['error'] ?? '') . ' (<a href="?p=udrzba">Údržba</a>)</div>';
+        }
+        if ($knownRej > 0) {
+            echo '<div class="flash err">Dnes bylo odmítnuto ' . $knownRej . ' zařízení, která jsou v seznamu povolených – '
+                . '<a href="?p=zamitnuta&d=1">podívejte se na Zamítnutá</a> (u zařízení přidaných až dnes je to v pořádku).</div>';
+        }
+        $tile = fn($val, $label, $sub = '', $cls = '') => '<div class="tile' . $cls . '"><b>' . $val . '</b><span>' . $label . '</span>'
+            . ($sub !== '' ? '<small>' . $sub . '</small>' : '') . '</div>';
+        echo '<div class="tiles">'
+            . $tile($num($tday['data']['povoleno_zarizeni'] ?? 0), 'připojených zařízení dnes',
+                'včera ' . ($yday['data'] !== null ? $num($yday['data']['povoleno_zarizeni']) : '–'))
+            . $tile($num($act7), 'aktivních za 7 dní', $pct($act7, $total) . ' z povolených')
+            . $tile($num($act30), 'aktivních za 30 dní', $histDays < 30 ? 'historie zatím jen ' . $histDays . ' dní' : $pct($act30, $total) . ' z povolených')
+            . $tile($num($total), 'povolených zařízení', 'náhodných adres ' . $pct($random, $total))
+            . $tile($num($tday['data']['zamitnuto_zarizeni'] ?? 0), 'zamítnutých zařízení dnes',
+                $num($tday['data']['zamitnuto_pokusu'] ?? 0) . ' pokusů')
+            . $tile($num($new7), 'nových zařízení za 7 dní')
+            . '</div>';
+
+        // povolena a zamitnuta zarizeni po dnech / tydnech / mesicich
+        $g = in_array($_GET['g'] ?? '', ['tyden', 'mesic'], true) ? $_GET['g'] : 'den';
+        $names = ['den' => ['Po dnech', 30, 'den'], 'tyden' => ['Po týdnech', 12, 'týden od'], 'mesic' => ['Po měsících', 12, 'měsíc']];
+        $series = stats_series($g, $names[$g][1]);
+        while ($series && $series[0]['data'] === null) {
+            array_shift($series); // obdobi pred zacatkem historie vynechat
+        }
+        echo '<div class="card"><h2>Zařízení – povolená a zamítnutá</h2><div class="seg">';
+        foreach ($names as $k => [$lab]) {
+            echo '<a href="?p=prehled&g=' . $k . '"' . ($k === $g ? ' class="on"' : '') . '>' . $lab . '</a>';
+        }
+        echo '</div>';
+        if (!$series) {
+            echo '<p class="mut">Zatím žádná data.</p>';
+        } else {
+            $pts = [];
+            foreach ($series as $x) {
+                $v = $x['data'] ?? array_fill_keys(['povoleno_zarizeni', 'zamitnuto_zarizeni', 'povoleno_pokusu', 'zamitnuto_pokusu'], 0);
+                $period = $g === 'den' ? $x['from']->format('j. n.') : ($g === 'tyden' ? 'týden od ' . $x['from']->format('j. n.') : $x['from']->format('n/Y'));
+                $pts[] = ['label' => $x['label'], 'v' => ['a' => $v['povoleno_zarizeni'], 'r' => $v['zamitnuto_zarizeni']],
+                    'tip' => $period . ': povoleno ' . $v['povoleno_zarizeni'] . ', zamítnuto ' . $v['zamitnuto_zarizeni'] . ' zařízení'];
+            }
+            echo bar_chart($pts, ['a' => ['povolená zařízení', 's1'], 'r' => ['zamítnutá zařízení', 's2']], $g === 'den' ? 10 : 12);
+            echo '<details><summary>Tabulka</summary><table><tr><th>' . ucfirst($names[$g][2]) . '</th><th>Povolená zařízení</th><th>Pokusů povoleno</th>'
+                . '<th>Zamítnutá zařízení</th><th>Pokusů zamítnuto</th></tr>';
+            foreach (array_reverse($series) as $x) {
+                $v = $x['data'];
+                $period = $g === 'den' ? $x['from']->format('j. n. Y') : ($g === 'tyden' ? $x['from']->format('j. n.') . ' – ' . $x['to']->modify('-1 day')->format('j. n. Y') : $x['from']->format('n/Y'));
+                echo '<tr><td class="nowrap">' . h($period) . (!$x['complete'] ? ' <span class="mut">(probíhá)</span>' : '') . '</td>'
+                    . ($v === null ? '<td colspan="4" class="mut">bez dat</td>'
+                        : '<td>' . $num($v['povoleno_zarizeni']) . '</td><td class="mut">' . $num($v['povoleno_pokusu']) . '</td><td>'
+                        . $num($v['zamitnuto_zarizeni']) . '</td><td class="mut">' . $num($v['zamitnuto_pokusu']) . '</td>') . '</tr>';
+            }
+            echo '</table><p class="mut">Zařízení = různé MAC adresy v daném období (zařízení připojené víckrát se počítá jednou), pokusy = všechna ověření. '
+                . 'Souhrny uzavřených období se ukládají, takže zůstanou i po promazání historie přihlášení.</p></details>';
+        }
+        echo '</div>';
+
+        // vytizeni podle hodiny - prumer pracovnich dnu za posledni tyden
+        $st = $pdo->prepare("SELECT DATE(authdate) AS den, HOUR(authdate) AS h, COUNT(DISTINCT username) AS z FROM radpostauth
+                             WHERE reply = 'Access-Accept' AND authdate >= ? AND authdate < ? AND WEEKDAY(authdate) < 5 GROUP BY den, h");
+        $st->execute([$d(7), $today->format('Y-m-d')]);
+        $sum = array_fill(0, 24, 0);
+        $days = [];
+        foreach ($st as $r) {
+            $sum[(int)$r['h']] += (int)$r['z'];
+            $days[$r['den']] = true;
+        }
+        echo '<div class="card"><h2>Vytížení během dne</h2>';
+        if (!$days) {
+            echo '<p class="mut">Zatím žádný celý pracovní den v historii.</p>';
+        } else {
+            $nd = count($days);
+            $pts = [];
+            for ($h = 6; $h <= 20; $h++) {
+                $avg = (int)round($sum[$h] / $nd);
+                $pts[] = ['label' => $h . ' h', 'v' => ['a' => $avg], 'tip' => $h . ':00–' . $h . ':59: průměrně ' . $avg . ' připojených zařízení'];
+            }
+            echo bar_chart($pts, ['a' => ['připojená zařízení', 's1']], 8)
+                . '<p class="mut">Průměrný počet různých připojených zařízení v jednotlivých hodinách (6–20 h) za posledních ' . $nd . ' pracovních dní (bez dneška).</p>';
+        }
+        echo '</div>';
+
+        // aktivita podle trid
+        $st = $pdo->prepare("SELECT IFNULL(i.trida, '') AS trida, COUNT(*) AS celkem,
+                SUM(EXISTS (SELECT 1 FROM radpostauth p WHERE p.username = r.username AND p.reply = 'Access-Accept' AND p.authdate >= ?)) AS aktivni
+             FROM radcheck r LEFT JOIN mac_info i ON i.mac = r.username WHERE r.attribute = ? GROUP BY 1");
+        $st->execute([$d(6), $attr]);
+        $tridy = $st->fetchAll();
+        usort($tridy, fn($a, $b) => [$a['trida'] === '', $a['trida']] <=> [$b['trida'] === '', $b['trida']]); // bez tridy na konec
+        if (count($tridy) > 1) {
+            echo '<div class="card"><h2>Aktivita podle tříd (posledních 7 dní)</h2><div class="scroll"><table>'
+                . '<tr><th>Třída</th><th>Zařízení</th><th>Aktivních</th><th></th></tr>';
+            foreach ($tridy as $r) {
+                $p = $r['celkem'] > 0 ? round($r['aktivni'] / $r['celkem'] * 100) : 0;
+                $link = $r['trida'] !== '' ? '<a href="?p=zarizeni&t=' . urlencode($r['trida']) . '">' . h($r['trida']) . '</a>' : '<span class="mut">bez třídy</span>';
+                echo '<tr><td>' . $link . '</td><td>' . (int)$r['celkem'] . '</td><td class="nowrap">' . (int)$r['aktivni'] . ' <span class="mut">(' . $p . ' %)</span></td>'
+                    . '<td style="width:40%"><div class="meter"><span style="width:' . $p . '%"></span></div></td></tr>';
+            }
+            echo '</table></div><p class="mut">Neaktivní zařízení jsou typicky staré telefony nebo zařízení absolventů – najdete je v Zařízení filtrem <em>Nepřihlášeno aspoň … dní</em>.</p></div>';
+        }
+
+        // nejcasteji zamitana dnes
+        $st = $pdo->prepare("SELECT username, COUNT(*) AS n FROM radpostauth WHERE reply = 'Access-Reject' AND authdate >= ?
+                             GROUP BY username ORDER BY n DESC LIMIT 5");
+        $st->execute([$today->format('Y-m-d')]);
+        $top = $st->fetchAll();
+        if ($top) {
+            echo '<div class="card"><h2>Nejčastěji zamítaná zařízení dnes</h2><table><tr><th>MAC</th><th>Pokusů</th><th></th></tr>';
+            foreach ($top as $r) {
+                $norm = normalize_mac($r['username']) ?? $r['username'];
+                $known = mac_exists($norm);
+                echo '<tr><td class="mono">' . h($r['username']) . (is_random_mac($r['username']) ? ' <span class="tag">náhodná</span>' : '') . '</td>'
+                    . '<td>' . (int)$r['n'] . '</td><td>' . ($known
+                        ? '<a href="?p=pridat&mac=' . urlencode($norm) . '">už povoleno</a>'
+                        : '<a href="?p=pridat&zpet=zamitnuta&mac=' . urlencode($norm) . '">povolit…</a>') . '</td></tr>';
+            }
+            echo '</table><p><a href="?p=zamitnuta&d=1">Všechna dnes zamítnutá →</a></p></div>';
+        }
+        break;
 
     /* ---------- Seznam zarizeni ---------- */
     case 'zarizeni':
@@ -710,6 +866,7 @@ try {
 <div class="card help">
 <p><strong>Obsah:</strong>
 <a href="#princip">Jak to funguje</a> ·
+<a href="#prehled">Přehled</a> ·
 <a href="#zarizeni">Zařízení</a> ·
 <a href="#zamitnuta">Zamítnutá</a> ·
 <a href="#smazana">Smazaná</a> ·
@@ -729,6 +886,20 @@ FreeRADIUS se podívá do tabulky povolených adres (<code>radcheck</code>): je-
 <p>Tahle aplikace jen upravuje seznam povolených adres a ukazuje historii. Jméno, třída a poznámka k adrese jsou zvlášť a FreeRADIUS je nepotřebuje.
 Změna v seznamu platí hned pro další připojení – nic se nerestartuje.</p>
 <p>Ve wifi řadiči (např. UniFi: Nastavení → Sítě → RADIUS servery) je jako RADIUS server nastavená IP tohoto serveru, port 1812, se sdíleným heslem z <code>/etc/raddb/clients.conf</code>. Účtovací servery nejsou potřeba.</p>
+</div>
+
+<div class="card help" id="prehled">
+<h2>Přehled (statistiky)</h2>
+<p>Úvodní stránka po přihlášení.</p>
+<ul>
+<li><strong>Dlaždice</strong> – kolik zařízení se dnes připojilo (a včera), kolik povolených zařízení bylo aktivních za 7 a 30 dní, celkový počet povolených a podíl náhodných adres,
+zamítnutá zařízení dnes a nová zařízení za týden. Nahoře se ukáže upozornění, když nefunguje import z OneDrive nebo když bylo dnes odmítnuto zařízení, které je v seznamu povolených.</li>
+<li><strong>Zařízení – povolená a zamítnutá</strong> – po dnech (30 dní), týdnech (12) nebo měsících (12). <em>Zařízení</em> = různé MAC adresy v období, v tabulce jsou i počty pokusů.
+Souhrny uzavřených dnů, týdnů a měsíců se ukládají (tabulka <code>statistika</code>), takže zůstanou i po promazání historie přihlášení po {$keepDays} dnech.</li>
+<li><strong>Vytížení během dne</strong> – průměrný počet připojených zařízení v jednotlivých hodinách za poslední pracovní dny.</li>
+<li><strong>Aktivita podle tříd</strong> – kolik zařízení třídy se za týden připojilo; nízké procento = staré telefony nebo absolventi k úklidu.</li>
+<li><strong>Nejčastěji zamítaná zařízení dnes</strong> – žáci se špatně zadanou adresou; <em>povolit…</em> rovnou zařízení přidá.</li>
+</ul>
 </div>
 
 <div class="card help" id="zarizeni">
@@ -922,7 +1093,7 @@ HTML;
         break;
 
     default:
-        redirect('?p=zarizeni');
+        redirect('?p=prehled');
     }
 } catch (PDOException $e) {
     error_log('macadmin: ' . $e->getMessage());

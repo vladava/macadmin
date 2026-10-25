@@ -1,6 +1,6 @@
 <?php
 // Denni udrzba - spousti cron, ne webovy server:
-// promazani historie prihlaseni (radpostauth) a zaloha seznamu povolenych zarizeni (CSV, 30 dni).
+// ulozeni souhrnu statistik, promazani historie prihlaseni (radpostauth) a zaloha seznamu povolenych zarizeni (CSV, 30 dni).
 //   15 2 * * * apache php /var/www/macadmin/udrzba.php >> /var/log/macadmin-udrzba.log 2>&1
 declare(strict_types=1);
 if (PHP_SAPI !== 'cli') {
@@ -10,6 +10,13 @@ if (PHP_SAPI !== 'cli') {
 require __DIR__ . '/lib.php';
 
 const BACKUP_DIR = '/var/lib/macadmin/zalohy';
+
+// souhrny statistik ulozit drive, nez se historie promaze
+try {
+    stats_refresh();
+} catch (Throwable $e) {
+    echo date('Y-m-d H:i:s') . ' statistiky selhaly: ' . $e->getMessage() . "\n";
+}
 
 $days = (int)cfg('postauth_keep_days');
 $n = prune_postauth($days);
