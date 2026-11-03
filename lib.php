@@ -201,17 +201,18 @@ function rename_mac(string $old, string $new): bool
     } else {
         $pdo->prepare('UPDATE radcheck SET username = ? WHERE BINARY username = ?')->execute([$new, $old]);
     }
-    $st = $pdo->prepare('SELECT jmeno, trida, poznamka, vytvoreno FROM mac_info WHERE BINARY mac = ?');
+    $st = $pdo->prepare('SELECT jmeno, trida, poznamka, vytvoreno, trvale FROM mac_info WHERE BINARY mac = ?');
     $st->execute([$old]);
     if ($info = $st->fetch()) {
         $pdo->prepare('DELETE FROM mac_info WHERE BINARY mac = ?')->execute([$old]);
         $pdo->prepare(
-            "INSERT INTO mac_info (mac, jmeno, trida, poznamka, vytvoreno) VALUES (?, ?, ?, ?, ?)
+            "INSERT INTO mac_info (mac, jmeno, trida, poznamka, vytvoreno, trvale) VALUES (?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
                jmeno = IF(jmeno = '', VALUES(jmeno), jmeno),
                trida = IF(trida = '', VALUES(trida), trida),
-               poznamka = IF(poznamka = '', VALUES(poznamka), poznamka)"
-        )->execute([$new, $info['jmeno'], $info['trida'], $info['poznamka'], $info['vytvoreno']]);
+               poznamka = IF(poznamka = '', VALUES(poznamka), poznamka),
+               trvale = GREATEST(trvale, VALUES(trvale))"
+        )->execute([$new, $info['jmeno'], $info['trida'], $info['poznamka'], $info['vytvoreno'], (int)$info['trvale']]);
     }
     return $merged;
 }
@@ -287,7 +288,7 @@ function delete_devices(array $macs): int
     try {
         $now = $pdo->query('SELECT NOW()')->fetchColumn();
         $info = [];
-        $st = $pdo->prepare("SELECT mac, jmeno, trida, poznamka FROM mac_info WHERE mac IN ($in)");
+        $st = $pdo->prepare("SELECT mac, jmeno, trida, poznamka, trvale FROM mac_info WHERE mac IN ($in)");
         $st->execute($macs);
         foreach ($st as $r) {
             $info[normalize_mac((string)$r['mac']) ?? $r['mac']] = $r;
@@ -297,13 +298,14 @@ function delete_devices(array $macs): int
         $n = $st->rowCount();
         $pdo->prepare("DELETE FROM mac_info WHERE mac IN ($in)")->execute($macs);
         $mark = $pdo->prepare(
-            'INSERT INTO mac_smazane (mac, smazano, jmeno, trida, poznamka) VALUES (?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE smazano = VALUES(smazano), jmeno = VALUES(jmeno), trida = VALUES(trida), poznamka = VALUES(poznamka)'
+            'INSERT INTO mac_smazane (mac, smazano, jmeno, trida, poznamka, trvale) VALUES (?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE smazano = VALUES(smazano), jmeno = VALUES(jmeno), trida = VALUES(trida),
+               poznamka = VALUES(poznamka), trvale = VALUES(trvale)'
         );
         foreach ($macs as $m) {
             if (($norm = normalize_mac((string)$m)) !== null) {
-                $i = $info[$norm] ?? ['jmeno' => '', 'trida' => '', 'poznamka' => ''];
-                $mark->execute([$norm, $now, $i['jmeno'], $i['trida'], $i['poznamka']]);
+                $i = $info[$norm] ?? ['jmeno' => '', 'trida' => '', 'poznamka' => '', 'trvale' => 0];
+                $mark->execute([$norm, $now, $i['jmeno'], $i['trida'], $i['poznamka'], (int)$i['trvale']]);
             }
         }
         $pdo->commit();
@@ -327,15 +329,15 @@ function is_student_email(string $email): bool
 }
 
 /**
- * Rozdeli zarizeni (zapis z radcheck) na zakovska (e-mail v poznamce konci student_domain) a ostatni.
- * Vraci [zakovska MAC, ostatni jako "MAC (jmeno)"].
+ * Rozdeli zarizeni (zapis z radcheck) na ta, ktera smi smazat hromadne mazani (zakovska - e-mail v poznamce konci
+ * student_domain - a ne trvala), a ostatni. Vraci [smazatelne MAC, ostatni jako "MAC (jmeno) – duvod"].
  */
 function split_student_devices(array $macs): array
 {
     if (!$macs) {
         return [[], []];
     }
-    $st = db()->prepare('SELECT mac, jmeno, poznamka FROM mac_info WHERE mac IN (' . implode(',', array_fill(0, count($macs), '?')) . ')');
+    $st = db()->prepare('SELECT mac, jmeno, poznamka, trvale FROM mac_info WHERE mac IN (' . implode(',', array_fill(0, count($macs), '?')) . ')');
     $st->execute(array_values($macs));
     $info = [];
     foreach ($st as $r) {
@@ -344,10 +346,13 @@ function split_student_devices(array $macs): array
     $students = $others = [];
     foreach ($macs as $m) {
         $i = $info[strtoupper((string)$m)] ?? null;
-        if ($i !== null && is_student_email((string)$i['poznamka'])) {
+        $label = $m . ($i !== null && $i['jmeno'] !== '' ? ' (' . $i['jmeno'] . ')' : '');
+        if ($i !== null && $i['trvale']) {
+            $others[] = $label . ' – trvalé';
+        } elseif ($i !== null && is_student_email((string)$i['poznamka'])) {
             $students[] = $m;
         } else {
-            $others[] = $m . ($i !== null && $i['jmeno'] !== '' ? ' (' . $i['jmeno'] . ')' : '');
+            $others[] = $label;
         }
     }
     return [$students, $others];
@@ -356,12 +361,27 @@ function split_student_devices(array $macs): array
 /** Obnovi smazana zarizeni i s ulozenymi udaji. Vraci pocet obnovenych. */
 function restore_devices(array $macs): int
 {
-    $st = db()->prepare('SELECT mac, jmeno, trida, poznamka FROM mac_smazane WHERE mac = ?');
+    $st = db()->prepare('SELECT mac, jmeno, trida, poznamka, trvale FROM mac_smazane WHERE mac = ?');
     $n = 0;
     foreach ($macs as $m) {
         $st->execute([(string)$m]);
         if ($r = $st->fetch()) {
             save_device($r['mac'], $r['jmeno'], $r['trida'], $r['poznamka']); // smaze i zaznam v mac_smazane
+            set_permanent([$r['mac']], (bool)$r['trvale']);
+            $n++;
+        }
+    }
+    return $n;
+}
+
+/** Oznaci zarizeni jako trvala (hromadne mazani je preskoci), nebo to zrusi. Vraci pocet zmenenych. */
+function set_permanent(array $macs, bool $on): int
+{
+    $n = 0;
+    $ins = db()->prepare('INSERT INTO mac_info (mac, trvale) VALUES (?, ?) ON DUPLICATE KEY UPDATE trvale = VALUES(trvale)');
+    foreach ($macs as $m) {
+        if (mac_exists((string)$m)) {
+            $ins->execute([$m, $on ? 1 : 0]);
             $n++;
         }
     }
@@ -461,7 +481,7 @@ function prune_postauth(int $days, int $batch = 20000): int
 }
 
 /**
- * Filtr seznamu zarizeni z parametru (GET nebo POST): q, t, l, r, n, m.
+ * Filtr seznamu zarizeni z parametru (GET nebo POST): q, t, l, r, n, m, tr.
  * Vraci hodnoty filtru, podminky WHERE a jejich parametry; 'active' = je zadany aspon jeden filtr.
  */
 function device_filter(array $src): array
@@ -495,6 +515,10 @@ function device_filter(array $src): array
         $where[] = "i.trida LIKE ?";
         $args[] = '____.' . $l;
     }
+    $perm = !empty($src['tr']);
+    if ($perm) {
+        $where[] = 'i.trvale = 1';
+    }
     if ($rnd) {
         // stejne pravidlo jako is_random_mac(): druhy hexa znak 2, 6, A nebo E
         $where[] = "UPPER(SUBSTRING(REPLACE(REPLACE(REPLACE(r.username, ':', ''), '-', ''), '.', ''), 2, 1)) IN ('2', '6', 'A', 'E')";
@@ -509,8 +533,8 @@ function device_filter(array $src): array
         $args[] = $m;
     }
     return [
-        'q' => $q, 't' => $t, 'l' => $l, 'r' => $rnd, 'n' => $nd, 'm' => $m, 'where' => $where, 'args' => $args,
-        'active' => $q !== '' || $t !== '' || $l !== '' || $rnd || $nd > 0 || $m > 1,
+        'q' => $q, 't' => $t, 'l' => $l, 'r' => $rnd, 'n' => $nd, 'm' => $m, 'tr' => $perm, 'where' => $where, 'args' => $args,
+        'active' => $q !== '' || $t !== '' || $l !== '' || $rnd || $nd > 0 || $m > 1 || $perm,
     ];
 }
 
@@ -1121,7 +1145,7 @@ button.link{background:none;border:0;color:var(--acc);padding:0}
 .flash{padding:8px 12px;border-radius:6px;margin:0 0 12px}.flash.ok{background:var(--ok);color:var(--okf)}.flash.err{background:var(--err);color:var(--errf)}
 .row{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:0 0 12px}.row label{display:flex;flex-direction:column;gap:2px;font-size:13px;color:var(--mut)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:0 0 16px}
-.tag{display:inline-block;font-size:12px;padding:1px 6px;border-radius:4px;background:var(--warn)}.mut{color:var(--mut)}
+.tag{display:inline-block;font-size:12px;padding:1px 6px;border-radius:4px;background:var(--warn)}.tag.perm{background:var(--ok);color:var(--okf)}.mut{color:var(--mut)}
 .scroll{overflow-x:auto}
 th a.sort{color:inherit;text-decoration:none}th a.sort:hover{color:var(--acc)}
 .tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin:0 0 16px}.tile{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 14px}

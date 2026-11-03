@@ -8,7 +8,7 @@ start_session();
 function flash_kept(array $others): void
 {
     if ($others) {
-        flash('Nesmazáno ' . count($others) . ' zařízení bez žákovského e-mailu (' . student_domain() . '): '
+        flash('Nesmazáno ' . count($others) . ' zařízení – trvalá' . (student_domain() !== '' ? ' nebo bez žákovského e-mailu (' . student_domain() . ')' : '') . ': '
             . implode(', ', array_slice($others, 0, 30)) . (count($others) > 30 ? ' …' : '')
             . '. Smazat je jde jednotlivě přes upravit → Smazat zařízení.', 'err');
     }
@@ -243,6 +243,13 @@ try {
 
     /* ---------- Seznam zarizeni ---------- */
     case 'zarizeni':
+        if ($post && (isset($_POST['perm_on']) || isset($_POST['perm_off']))) {
+            $macs = array_values(array_filter(array_map('strval', (array)($_POST['mac'] ?? [])), fn($x) => $x !== ''));
+            $on = isset($_POST['perm_on']);
+            $n = set_permanent($macs, $on);
+            flash(($on ? 'Označeno jako trvalé: ' : 'Zrušeno trvalé: ') . $n . ' zařízení.');
+            redirect('?p=zarizeni&' . http_build_query(array_intersect_key($_POST, array_flip(['q', 't', 'l', 'r', 'n', 'm', 'tr', 'o', 'd']))));
+        }
         if ($post && isset($_POST['delete_all'])) {
             // vsechna zarizeni odpovidajici filtru (i pres vic stranek); bez filtru nic
             $f = device_filter($_POST);
@@ -254,7 +261,9 @@ try {
                 . implode(' AND ', $f['where']));
             $st->execute($f['args']);
             [$students, $others] = split_student_devices($st->fetchAll(PDO::FETCH_COLUMN));
-            flash('Smazáno zařízení: ' . delete_devices($students) . '. Vrátit je jde na stránce Smazaná.');
+            if ($n = delete_devices($students)) {
+                flash("Smazáno zařízení: $n. Vrátit je jde na stránce Smazaná.");
+            }
             flash_kept($others);
             redirect('?p=zarizeni');
         }
@@ -267,7 +276,9 @@ try {
                 flash("Smazáno zařízení: $n. Vrátit ho jde na stránce Smazaná.");
             } else {
                 [$students, $others] = split_student_devices($macs);
-                flash('Smazáno zařízení: ' . delete_devices($students) . '. Vrátit je jde na stránce Smazaná.');
+                if ($n = delete_devices($students)) {
+                    flash("Smazáno zařízení: $n. Vrátit je jde na stránce Smazaná.");
+                }
                 flash_kept($others);
             }
             if (($_POST['zpet'] ?? '') === 'udrzba') {
@@ -275,11 +286,11 @@ try {
             }
             redirect('?p=zarizeni&' . http_build_query([
                 'q' => $_POST['q'] ?? '', 't' => $_POST['t'] ?? '', 'l' => $_POST['l'] ?? '', 'r' => $_POST['r'] ?? '', 'n' => $_POST['n'] ?? '', 'm' => $_POST['m'] ?? '',
-                'o' => $_POST['o'] ?? '', 'd' => $_POST['d'] ?? '',
+                'tr' => $_POST['tr'] ?? '', 'o' => $_POST['o'] ?? '', 'd' => $_POST['d'] ?? '',
             ]));
         }
         $f = device_filter($_GET);
-        ['q' => $q, 't' => $t, 'l' => $l, 'r' => $rnd, 'n' => $nd, 'm' => $m, 'where' => $where, 'args' => $args] = $f;
+        ['q' => $q, 't' => $t, 'l' => $l, 'r' => $rnd, 'n' => $nd, 'm' => $m, 'tr' => $perm, 'where' => $where, 'args' => $args] = $f;
         $s = max(1, (int)($_GET['s'] ?? 1));
         $perPage = 500;
         // trideni podle sloupce: o = klic sloupce, d = asc|desc
@@ -295,7 +306,7 @@ try {
         $found = (int)$st->fetchColumn();
         $pages = max(1, (int)ceil($found / $perPage));
         $s = min($s, $pages);
-        $st = db()->prepare("SELECT r.username AS mac, i.jmeno, i.trida, i.poznamka, i.vytvoreno,
+        $st = db()->prepare("SELECT r.username AS mac, i.jmeno, i.trida, i.poznamka, i.vytvoreno, IFNULL(i.trvale, 0) AS trvale,
                   (SELECT MAX(p.authdate) FROM radpostauth p WHERE p.username = r.username AND p.reply = 'Access-Accept') AS naposledy
                 $from
                 ORDER BY $order LIMIT $perPage OFFSET " . (($s - 1) * $perPage));
@@ -306,7 +317,7 @@ try {
         $st->execute([cfg('radcheck_attribute')]);
         $total = (int)$st->fetchColumn();
         $since = db()->query('SELECT MIN(authdate) FROM radpostauth')->fetchColumn();
-        $keep = ['p' => 'zarizeni', 'q' => $q, 't' => $t, 'l' => $l, 'r' => $rnd ? '1' : '', 'n' => $nd ?: '', 'm' => $m ?: ''];
+        $keep = ['p' => 'zarizeni', 'q' => $q, 't' => $t, 'l' => $l, 'r' => $rnd ? '1' : '', 'n' => $nd ?: '', 'm' => $m ?: '', 'tr' => $perm ? '1' : ''];
         $sortKeep = $o !== '' ? ['o' => $o, 'd' => $d] : [];
         $th = function (string $key, string $label) use ($keep, $o, $d): string {
             $next = $o === $key && $d === 'asc' ? 'desc' : 'asc';
@@ -333,7 +344,8 @@ try {
         echo '</select></label>'
             . '<label>Nepřihlášeno aspoň (dní)<input name="n" type="number" min="1" max="3650" value="' . ($nd ?: '') . '" size="5"></label>'
             . '<label>Zařízení na e-mail aspoň<input name="m" type="number" min="2" max="50" value="' . ($m ?: '') . '" size="4"></label>'
-            . '<label><span><input type="checkbox" name="r" value="1"' . ($rnd ? ' checked' : '') . '> jen náhodné</span></label>'
+            . '<label><span><input type="checkbox" name="r" value="1"' . ($rnd ? ' checked' : '') . '> jen náhodné</span>'
+            . '<span><input type="checkbox" name="tr" value="1"' . ($perm ? ' checked' : '') . '> jen trvalá</span></label>'
             . '<button>Filtrovat</button></form>';
         if ($nd > 0 && ($since === null || strtotime((string)$since) > time() - $nd * 86400)) {
             echo '<div class="flash err">Historie přihlášení je k dispozici teprve od '
@@ -351,34 +363,41 @@ try {
         echo '</p>';
         echo '<form method="post">' . csrf_field()
             . '<input type="hidden" name="q" value="' . h($q) . '"><input type="hidden" name="t" value="' . h($t) . '"><input type="hidden" name="l" value="' . h($l) . '">'
-            . '<input type="hidden" name="r" value="' . ($rnd ? '1' : '') . '"><input type="hidden" name="n" value="' . ($nd ?: '') . '"><input type="hidden" name="m" value="' . ($m ?: '') . '">'
+            . '<input type="hidden" name="r" value="' . ($rnd ? '1' : '') . '"><input type="hidden" name="n" value="' . ($nd ?: '') . '"><input type="hidden" name="m" value="' . ($m ?: '') . '"><input type="hidden" name="tr" value="' . ($perm ? '1' : '') . '">'
             . '<input type="hidden" name="o" value="' . h($o) . '"><input type="hidden" name="d" value="' . h($d) . '">'
             . '<div class="scroll"><table><tr><th><input type="checkbox" onclick="for(const c of document.querySelectorAll(\'.sel\'))c.checked=this.checked"></th>'
             . $th('mac', 'MAC') . $th('jmeno', 'Jméno') . $th('trida', 'Třída') . $th('poznamka', 'Poznámka')
             . $th('pridano', 'Přidáno') . $th('naposledy', 'Naposledy') . '<th></th></tr>';
         foreach ($rows as $r) {
             echo '<tr><td><input type="checkbox" class="sel" name="mac[]" value="' . h($r['mac']) . '"></td>'
-                . '<td class="mono">' . h($r['mac']) . (is_random_mac($r['mac']) ? ' <span class="tag">náhodná</span>' : '') . '</td>'
+                . '<td class="mono">' . h($r['mac']) . (is_random_mac($r['mac']) ? ' <span class="tag">náhodná</span>' : '')
+                . ($r['trvale'] ? ' <span class="tag perm" title="Hromadné mazání ho přeskočí">trvalé</span>' : '') . '</td>'
                 . '<td>' . h($r['jmeno']) . '</td><td>' . h($r['trida']) . '</td><td>' . h($r['poznamka']) . '</td>'
                 . '<td class="mut">' . h($r['vytvoreno'] ? substr($r['vytvoreno'], 0, 10) : '') . '</td>'
                 . '<td class="mut">' . h($r['naposledy'] ? substr($r['naposledy'], 0, 16) : '–') . '</td>'
                 . '<td><a href="?p=pridat&mac=' . urlencode($r['mac']) . '">upravit</a></td></tr>';
         }
-        echo '</table></div><p class="row"><button class="danger" name="delete" value="1" onclick="return confirm(\'Opravdu smazat vybraná zařízení?\')">Smazat vybrané</button>';
+        echo '</table></div><p class="row"><button class="sec" name="perm_on" value="1">Označit vybrané jako trvalé</button>'
+            . '<button class="sec" name="perm_off" value="1">Zrušit trvalé</button>'
+            . '<button class="danger" name="delete" value="1" onclick="return confirm(\'Opravdu smazat vybraná zařízení?\')">Smazat vybrané</button>';
         if ($f['active'] && $found > 0) {
-            $stud = $found; // bez nastavene domeny zaku jsou hromadne smazatelna vsechna
+            // hromadne smazatelna: ne trvala a (je-li nastavena domena zaku) jen zakovska
             if (student_domain() !== '') {
-                $st = db()->prepare("SELECT COUNT(*) $from AND LOWER(i.poznamka) LIKE ?");
+                $st = db()->prepare("SELECT COUNT(*) $from AND IFNULL(i.trvale, 0) = 0 AND LOWER(i.poznamka) LIKE ?");
                 $st->execute(array_merge($args, ['%' . addcslashes(student_domain(), '%_\\')]));
-                $stud = (int)$st->fetchColumn();
+            } else {
+                $st = db()->prepare("SELECT COUNT(*) $from AND IFNULL(i.trvale, 0) = 0");
+                $st->execute($args);
             }
+            $stud = (int)$st->fetchColumn();
             if ($stud > 0) {
                 $what = student_domain() === '' ? 'nalezených zařízení' : 'nalezených zařízení žáků';
                 echo '<button class="danger" name="delete_all" value="1" onclick="return confirm(\'Opravdu smazat ' . $stud . ' ' . $what . '?\')">'
                     . 'Smazat ' . $stud . ' ' . $what . '</button>';
             }
             if ($found > $stud) {
-                echo '<span class="mut">Bez žákovského e-mailu (' . h(student_domain()) . '): ' . ($found - $stud) . ' – hromadně se nesmažou.</span>';
+                echo '<span class="mut">Trvalá' . (student_domain() !== '' ? ' nebo bez žákovského e-mailu (' . h(student_domain()) . ')' : '') . ': '
+                    . ($found - $stud) . ' – hromadně se nesmažou.</span>';
             }
         }
         echo '</p></form>';
@@ -410,6 +429,7 @@ try {
                 mb_substr(trim((string)($_POST['poznamka'] ?? '')), 0, 255),
                 $old
             );
+            set_permanent([$mac], !empty($_POST['trvale']));
             flash($res === 'added' ? "Přidáno: $mac" : "Uloženo: $mac");
             if (is_random_mac($mac)) {
                 flash("Pozor: $mac je náhodná (soukromá) adresa, telefon ji může časem změnit.", 'err');
@@ -421,11 +441,11 @@ try {
         $norm = $arg !== '' ? normalize_mac($arg) : null;
         // presny zapis v databazi; odkaz ze seznamu nese i nestandardni zapis
         $edit = $arg !== '' ? (find_mac($arg) ?? ($norm !== null ? find_mac($norm) : null)) : null;
-        $d = ['mac' => $norm ?? '', 'jmeno' => '', 'trida' => '', 'poznamka' => ''];
+        $d = ['mac' => $norm ?? '', 'jmeno' => '', 'trida' => '', 'poznamka' => '', 'trvale' => 0];
         $isEdit = $edit !== null;
         if ($isEdit) {
             $d['mac'] = normalize_mac($edit) ?? $edit;
-            $st = db()->prepare('SELECT jmeno, trida, poznamka FROM mac_info WHERE mac = ?');
+            $st = db()->prepare('SELECT jmeno, trida, poznamka, trvale FROM mac_info WHERE mac = ?');
             $st->execute([$edit]);
             $d = array_merge($d, $st->fetch() ?: []);
         }
@@ -440,10 +460,13 @@ try {
             . '<label>Jméno<input name="jmeno" value="' . h($d['jmeno']) . '" size="26" maxlength="100"></label>'
             . '<label>Třída<input name="trida" value="' . h($d['trida']) . '" size="8" maxlength="20" list="tridy"></label>'
             . '<label>Poznámka<input name="poznamka" value="' . h($d['poznamka']) . '" size="30" maxlength="255"></label></div>'
+            . '<div class="row"><label><span><input type="checkbox" name="trvale" value="1"' . ($d['trvale'] ? ' checked' : '') . '> '
+            . 'Trvalé – nemazat pro neaktivitu (hromadné mazání ho přeskočí; např. zařízení, které se objeví jednou za rok)</span></label></div>'
             . '<button>' . ($isEdit ? 'Uložit' : 'Přidat') . '</button></form>';
         if ($isEdit) {
-            $ask = is_student_email((string)$d['poznamka']) ? 'Opravdu smazat toto zařízení?'
-                : 'Toto zařízení nemá žákovský e-mail (učitel, technika…). Opravdu ho smazat?';
+            $ask = $d['trvale'] ? 'Toto zařízení je označené jako trvalé. Opravdu ho smazat?'
+                : (is_student_email((string)$d['poznamka']) ? 'Opravdu smazat toto zařízení?'
+                : 'Toto zařízení nemá žákovský e-mail (učitel, technika…). Opravdu ho smazat?');
             echo '<form method="post" action="?p=zarizeni" onsubmit="return confirm(\'' . h($ask) . '\')">' . csrf_field()
                 . '<input type="hidden" name="mac[]" value="' . h($edit) . '"><input type="hidden" name="zpet" value="' . h($zpet) . '">'
                 . '<input type="hidden" name="jedno" value="1">'
@@ -717,7 +740,7 @@ try {
         $st = db()->prepare("SELECT COUNT(*) FROM mac_smazane WHERE $where");
         $st->execute($args);
         $found = (int)$st->fetchColumn();
-        $st = db()->prepare("SELECT mac, jmeno, trida, poznamka, smazano FROM mac_smazane WHERE $where ORDER BY smazano DESC, trida, jmeno LIMIT 500");
+        $st = db()->prepare("SELECT mac, jmeno, trida, poznamka, smazano, trvale FROM mac_smazane WHERE $where ORDER BY smazano DESC, trida, jmeno LIMIT 500");
         $st->execute($args);
         $rows = $st->fetchAll();
         $batches = db()->query('SELECT smazano, COUNT(*) AS n FROM mac_smazane GROUP BY smazano ORDER BY smazano DESC LIMIT 5')->fetchAll();
@@ -741,7 +764,8 @@ try {
             . '<th>MAC</th><th>Jméno</th><th>Třída</th><th>Poznámka</th><th>Smazáno</th></tr>';
         foreach ($rows as $r) {
             echo '<tr><td><input type="checkbox" class="seldel" name="mac[]" value="' . h($r['mac']) . '"></td>'
-                . '<td class="mono">' . h($r['mac']) . (is_random_mac($r['mac']) ? ' <span class="tag">náhodná</span>' : '') . '</td>'
+                . '<td class="mono">' . h($r['mac']) . (is_random_mac($r['mac']) ? ' <span class="tag">náhodná</span>' : '')
+                . ($r['trvale'] ? ' <span class="tag perm">trvalé</span>' : '') . '</td>'
                 . '<td>' . h($r['jmeno']) . '</td><td>' . h($r['trida']) . '</td><td>' . h($r['poznamka']) . '</td>'
                 . '<td class="mut">' . h(substr((string)$r['smazano'], 0, 16)) . '</td></tr>';
         }
@@ -932,6 +956,10 @@ Souhrny uzavřených dnů, týdnů a měsíců se ukládají (tabulka <code>stat
 <li><strong>Třída</strong> – {$tridaText} <strong>Písmeno třídy</strong> se ukáže u tříd ve tvaru rok nástupu a písmeno (<code>2026.g</code>) a vybere všechny ročníky s daným písmenem.</li>
 <li><strong>Naposledy</strong> – poslední úspěšné připojení k wifi. Historie se uchovává {$keepDays} dní, „–“ znamená, že se zařízení za tu dobu nepřipojilo.</li>
 <li><strong>Nepřihlášeno aspoň (dní)</strong> – zařízení, která se tak dlouho nepřipojila. Hodí se na úklid: vyfiltrovat, zaškrtnout vše v hlavičce tabulky, <em>Smazat vybrané</em>. Dokud historie nepokrývá zvolený počet dní, ukáže se červené upozornění, že výsledek není spolehlivý.</li>
+<li><strong>Trvalá zařízení</strong> – zařízení, která se objeví jen občas (např. externí pracovníci jednou za rok) a nemají se mazat pro neaktivitu.
+Označíte je zaškrtnutím <em>Trvalé</em> na stránce zařízení (upravit), nebo hromadně: vybrat v seznamu a <em>Označit vybrané jako trvalé</em> (<em>Zrušit trvalé</em> naopak).
+V seznamu mají zelený štítek <span class="tag perm">trvalé</span>, filtr <em>jen trvalá</em> je ukáže všechna. Hromadné mazání je vždy přeskočí;
+smazat je jde jen jednotlivě přes <em>upravit → Smazat zařízení</em>. Po smazání a obnovení příznak zůstane.</li>
 <li><strong>Zařízení na e-mail aspoň</strong> – žáci s více zařízeními (např. 3 a víc): kdo si několikrát vyměnil telefon, nebo sdílí účet. Stará zařízení poznáte podle sloupce <em>Naposledy</em>.</li>
 <li><strong>Smazaná zařízení si aplikace pamatuje</strong> a import z Forms je znovu nepřidá, i když jsou pořád v Excelu – ledaže je adresa v Excelu zaregistrovaná znovu <em>po</em> smazání (viz <a href="#smazana">Smazaná</a>).</li>
 <li><strong>upravit</strong> – úprava údajů; dole je i posledních 20 pokusů o připojení (povoleno / zamítnuto), hodí se, když žák tvrdí, že mu wifi nejde.</li>

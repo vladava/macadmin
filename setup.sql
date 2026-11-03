@@ -12,6 +12,9 @@ CREATE TABLE IF NOT EXISTS mac_info (
   KEY trida (trida)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Trvala zarizeni (napr. externi pracovnici jednou za rok) - hromadne mazani je preskoci
+ALTER TABLE mac_info ADD COLUMN IF NOT EXISTS trvale TINYINT(1) NOT NULL DEFAULT 0;
+
 -- Smazana zarizeni - import ze souboru Forms je znovu neprida (rucni pridani zaznam zrusi)
 CREATE TABLE IF NOT EXISTS mac_smazane (
   mac        VARCHAR(17)  NOT NULL PRIMARY KEY,
@@ -23,6 +26,7 @@ ALTER TABLE mac_smazane
   ADD COLUMN IF NOT EXISTS jmeno    VARCHAR(100) NOT NULL DEFAULT '',
   ADD COLUMN IF NOT EXISTS trida    VARCHAR(20)  NOT NULL DEFAULT '',
   ADD COLUMN IF NOT EXISTS poznamka VARCHAR(255) NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS trvale   TINYINT(1)   NOT NULL DEFAULT 0,
   ADD INDEX IF NOT EXISTS smazano (smazano);
 
 -- Stav automatickych uloh (import z OneDrive, nocni zaloha) pro zobrazeni v Udrzbe

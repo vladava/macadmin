@@ -29,7 +29,7 @@ a obecný – nic specifického pro konkrétní školu (název, domény, e-maily
 - UI je česky s diakritikou; výstupy skriptů v konzoli a komentáře v kódu bez diakritiky.
 - Všechny SQL dotazy přes PDO prepared statements, všechny POST formuláře s CSRF tokenem, výstup přes `h()`.
 - MAC vždy normalizovat přes `normalize_mac()` (zvládá různé zápisy, zaměnitelné znaky i MAC uprostřed textu; z běžného textu MAC neposkládá); náhodné (soukromé) MAC poznat přes `is_random_mac()`.
-- Hromadné mazání (Smazat vybrané / všech nalezených) maže jen zařízení žáků (`poznamka` končí `student_email_domain`; prázdné = bez omezení), ostatní jen vypíše; jednotlivé zařízení z „upravit“ jde smazat vždy. Noční údržba zařízení nemaže, jen historii přihlášení.
+- Hromadné mazání (Smazat vybrané / všech nalezených) maže jen zařízení žáků (`poznamka` končí `student_email_domain`; prázdné = bez omezení), která nejsou trvalá (`mac_info.trvale`, např. externisté jednou za rok), ostatní jen vypíše; jednotlivé zařízení z „upravit“ jde smazat vždy. Noční údržba zařízení nemaže, jen historii přihlášení.
 - `config.php` se necommituje (je v .gitignore), vzor je `config.sample.php`.
 - Verze aplikace (`APP_VERSION` v `lib.php`, zobrazuje se v patičce) se doplní sama přes `export-subst` v `.gitattributes` při stažení tarballu z GitHubu – ručně ji neměnit.
 
