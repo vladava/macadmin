@@ -295,7 +295,7 @@ try {
         $perPage = 500;
         // trideni podle sloupce: o = klic sloupce, d = asc|desc
         $sorts = ['mac' => 'r.username', 'jmeno' => 'i.jmeno', 'trida' => 'i.trida', 'poznamka' => 'i.poznamka',
-                  'pridano' => 'i.vytvoreno', 'naposledy' => 'naposledy'];
+                  'pridano' => 'i.vytvoreno', 'naposledy' => 'naposledy', 'pocet' => 'pocet'];
         $o = (string)($_GET['o'] ?? '');
         $o = isset($sorts[$o]) ? $o : '';
         $d = ($_GET['d'] ?? '') === 'desc' ? 'desc' : 'asc';
@@ -306,9 +306,13 @@ try {
         $found = (int)$st->fetchColumn();
         $pages = max(1, (int)ceil($found / $perPage));
         $s = min($s, $pages);
-        $st = db()->prepare("SELECT r.username AS mac, i.jmeno, i.trida, i.poznamka, i.vytvoreno, IFNULL(i.trvale, 0) AS trvale,
+        // pocet zarizeni na stejny e-mail (poznamku) - celkem, bez ohledu na ostatni filtry
+        $fromSel = 'FROM radcheck r LEFT JOIN mac_info i ON i.mac = r.username'
+            . " LEFT JOIN (SELECT poznamka, COUNT(*) AS pocet FROM mac_info WHERE poznamka <> '' GROUP BY poznamka) pc ON pc.poznamka = i.poznamka"
+            . ' WHERE ' . implode(' AND ', $where);
+        $st = db()->prepare("SELECT r.username AS mac, i.jmeno, i.trida, i.poznamka, i.vytvoreno, IFNULL(i.trvale, 0) AS trvale, pc.pocet,
                   (SELECT MAX(p.authdate) FROM radpostauth p WHERE p.username = r.username AND p.reply = 'Access-Accept') AS naposledy
-                $from
+                $fromSel
                 ORDER BY $order LIMIT $perPage OFFSET " . (($s - 1) * $perPage));
         $st->execute($args);
         $rows = $st->fetchAll();
@@ -367,12 +371,14 @@ try {
             . '<input type="hidden" name="o" value="' . h($o) . '"><input type="hidden" name="d" value="' . h($d) . '">'
             . '<div class="scroll"><table><tr><th><input type="checkbox" onclick="for(const c of document.querySelectorAll(\'.sel\'))c.checked=this.checked"></th>'
             . $th('mac', 'MAC') . $th('jmeno', 'Jméno') . $th('trida', 'Třída') . $th('poznamka', 'Poznámka')
-            . $th('pridano', 'Přidáno') . $th('naposledy', 'Naposledy') . '<th></th></tr>';
+            . $th('pocet', 'Zařízení žáka') . $th('pridano', 'Přidáno') . $th('naposledy', 'Naposledy') . '<th></th></tr>';
         foreach ($rows as $r) {
             echo '<tr><td><input type="checkbox" class="sel" name="mac[]" value="' . h($r['mac']) . '"></td>'
                 . '<td class="mono">' . h($r['mac']) . (is_random_mac($r['mac']) ? ' <span class="tag">náhodná</span>' : '')
                 . ($r['trvale'] ? ' <span class="tag perm" title="Hromadné mazání ho přeskočí">trvalé</span>' : '') . '</td>'
                 . '<td>' . h($r['jmeno']) . '</td><td>' . h($r['trida']) . '</td><td>' . h($r['poznamka']) . '</td>'
+                . '<td>' . ($r['pocet'] ? '<a href="?p=zarizeni&amp;q=' . urlencode((string)$r['poznamka']) . '" title="Všechna zařízení se stejným e-mailem">'
+                    . (int)$r['pocet'] . '</a>' : '<span class="mut">–</span>') . '</td>'
                 . '<td class="mut">' . h($r['vytvoreno'] ? substr($r['vytvoreno'], 0, 10) : '') . '</td>'
                 . '<td class="mut">' . h($r['naposledy'] ? substr($r['naposledy'], 0, 16) : '–') . '</td>'
                 . '<td><a href="?p=pridat&mac=' . urlencode($r['mac']) . '">upravit</a></td></tr>';
@@ -960,6 +966,7 @@ Souhrny uzavřených dnů, týdnů a měsíců se ukládají (tabulka <code>stat
 Označíte je zaškrtnutím <em>Trvalé</em> na stránce zařízení (upravit), nebo hromadně: vybrat v seznamu a <em>Označit vybrané jako trvalé</em> (<em>Zrušit trvalé</em> naopak).
 V seznamu mají zelený štítek <span class="tag perm">trvalé</span>, filtr <em>jen trvalá</em> je ukáže všechna. Hromadné mazání je vždy přeskočí;
 smazat je jde jen jednotlivě přes <em>upravit → Smazat zařízení</em>. Po smazání a obnovení příznak zůstane.</li>
+<li><strong>Zařízení žáka</strong> (sloupec) – kolik zařízení má žák celkem na svůj e-mail, bez ohledu na ostatní filtry; kliknutím se vyhledají všechna jeho zařízení.</li>
 <li><strong>Zařízení na e-mail aspoň</strong> – žáci s více zařízeními (např. 3 a víc): kdo si několikrát vyměnil telefon, nebo sdílí účet. Stará zařízení poznáte podle sloupce <em>Naposledy</em>.</li>
 <li><strong>Smazaná zařízení si aplikace pamatuje</strong> a import z Forms je znovu nepřidá, i když jsou pořád v Excelu – ledaže je adresa v Excelu zaregistrovaná znovu <em>po</em> smazání (viz <a href="#smazana">Smazaná</a>).</li>
 <li><strong>upravit</strong> – úprava údajů; dole je i posledních 20 pokusů o připojení (povoleno / zamítnuto), hodí se, když žák tvrdí, že mu wifi nejde.</li>
